@@ -99,13 +99,12 @@ export function observeAsyncFactory<T>(
   );
 }
 
-export type CacheFn = <T>(
-  factory: AsyncFactory<T>,
-  key: string
-) => AsyncResponse<T>;
-
-export type SessionCacheFn = {
+export type CacheFn = {
   <T>(factory: AsyncFactory<T>, key: string): AsyncResponse<T>;
+  refresh: (...cacheKeys: string[]) => Promise<unknown[]>;
+};
+
+export type SessionCacheFn = CacheFn & {
   beginSession(): void;
   endSession(): void;
 };
@@ -117,10 +116,10 @@ function isSessionCacheFn(obj: any): obj is SessionCacheFn {
   );
 }
 
-export type CachedPromiseFn = <T>(
-  factory: AsyncFactory<T>,
-  key: string
-) => Promise<T>;
+export type CachedPromiseFn = {
+  <T>(factory: AsyncFactory<T>, key: string): Promise<T>;
+  refresh: (...cacheKeys: string[]) => Promise<unknown[]>;
+};
 
 export type FactoryWithCache<T> = (cache: CachedPromiseFn) => Promise<T>;
 
@@ -143,30 +142,32 @@ export function observeCachedFactory<T>(
       if (isSessionCacheFn(cache)) {
         cache.beginSession();
       }
-      const response = await factory(function inner<S>(
-        innerFactory: AsyncFactory<S>,
-        cacheKey: string
-      ) {
-        const observable = cache<S>(innerFactory, cacheKey);
-        const responseSubject = new Subject<S>();
-        const returnValue = responseSubject.toPromise();
-        subscriptions.push(
-          observable.subscribe(res => {
-            if (!responseSubject.isStopped) {
-              refreshArray.push(res.refresh);
-              if (res.response) {
-                responseSubject.next(res.response);
-                responseSubject.complete();
-              } else if (res.error) {
-                responseSubject.error(res.error);
-              }
-            } else {
-              refresh.next(null);
-            }
-          })
-        );
-        return returnValue;
-      });
+      const response = await factory(
+        Object.assign(
+          function inner<S>(innerFactory: AsyncFactory<S>, cacheKey: string) {
+            const observable = cache<S>(innerFactory, cacheKey);
+            const responseSubject = new Subject<S>();
+            const returnValue = responseSubject.toPromise();
+            subscriptions.push(
+              observable.subscribe(res => {
+                if (!responseSubject.isStopped) {
+                  refreshArray.push(res.refresh);
+                  if (res.response) {
+                    responseSubject.next(res.response);
+                    responseSubject.complete();
+                  } else if (res.error) {
+                    responseSubject.error(res.error);
+                  }
+                } else {
+                  refresh.next(null);
+                }
+              })
+            );
+            return returnValue;
+          },
+          { refresh: (...args: string[]) => cache.refresh(...args) }
+        )
+      );
       if (isSessionCacheFn(cache)) {
         cache.endSession();
       }
@@ -186,19 +187,34 @@ export function observeCachedFactory<T>(
 
 function createDefaultContext() {
   const store: HashStore<AsyncResponse<unknown>> = {};
-  function cache<T>(factory: AsyncFactory<T>, key: string): AsyncResponse<T> {
-    if (!store[key]) {
-      store[key] = observeAsyncFactory(factory).pipe(
-        finalize(() => {
-          console.log('Finalize');
-          delete store[key];
-        }),
-        publishReplay(1),
-        refCount()
-      );
+  const cache: CacheFn = Object.assign(
+    function cache<T>(factory: AsyncFactory<T>, key: string): AsyncResponse<T> {
+      if (!store[key]) {
+        store[key] = observeAsyncFactory(factory).pipe(
+          finalize(() => {
+            delete store[key];
+          }),
+          publishReplay(1),
+          refCount()
+        );
+      }
+      return store[key] as AsyncResponse<T>;
+    },
+    {
+      refresh(...cacheKeys: string[]) {
+        return Promise.all(
+          cacheKeys
+            .filter(cacheKey => store[cacheKey])
+            .map(cacheKey =>
+              store[cacheKey]
+                .pipe(take(1))
+                .toPromise()
+                .then(item => item.refresh())
+            )
+        );
+      },
     }
-    return store[key] as AsyncResponse<T>;
-  }
+  );
   return {
     cache,
   };
@@ -239,6 +255,9 @@ export function useAsyncCache(): SessionCacheFn {
         return store[cacheKey].observable as AsyncResponse<unknown>;
       }) as CacheFn,
       {
+        refresh(...cacheKeys: string[]) {
+          return cache.refresh(...cacheKeys);
+        },
         beginSession() {
           keySet.clear();
         },
@@ -267,10 +286,14 @@ export function useAsyncCache(): SessionCacheFn {
   return callback;
 }
 
-export function useAsync$<T>(
+export type AsyncState<T> = AsyncResponseBody<T> & {
+  pending: boolean;
+};
+
+export function useAsync<T>(
   factory: FactoryWithCache<T>,
   dependencies: unknown[]
-) {
+): AsyncState<T> {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const factories = useMemo(() => new BehaviorSubject(factory), []);
   useEffect(() => {
@@ -280,20 +303,9 @@ export function useAsync$<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factories, ...dependencies]);
   const cache = useAsyncCache();
-  return useMemo(() => {
+  const observable = useMemo(() => {
     return observeCachedFactory(factories.asObservable(), cache);
   }, [factories, cache]);
-}
-
-export type AsyncState<T> = AsyncResponseBody<T> & {
-  pending: boolean;
-};
-
-export function useAsync<T>(
-  factory: FactoryWithCache<T>,
-  dependencies: unknown[]
-): AsyncState<T> {
-  const observable = useAsync$(factory, dependencies);
   const [state, setState] = useState<AsyncResponseBody<T>>();
   const initialSubject = useMemo(
     () => new ReplaySubject<AsyncResponseBody<T>>(1),

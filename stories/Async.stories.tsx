@@ -11,6 +11,7 @@ function asyncQuery(text: string): Promise<string> {
 function AsyncComponent({ input }: any) {
   const { response = [] } = useAsync(
     async cache => {
+      await cache.refresh('textbox');
       const data = await cache(() => asyncQuery('textbox'), 'textbox');
       const data2 = await cache(() => asyncQuery('slider'), 'slider');
       const extra = input
