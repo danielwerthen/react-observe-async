@@ -1,4 +1,5 @@
 {
+  "name": "@dwerthen/react-async-cache",
   "version": "0.1.0",
   "license": "MIT",
   "main": "dist/index.js",
@@ -22,7 +23,8 @@
     "build-storybook": "build-storybook"
   },
   "peerDependencies": {
-    "react": ">=16"
+    "react": ">=16",
+    "rxjs": ">=6"
   },
   "husky": {
     "hooks": {
@@ -35,7 +37,6 @@
     "singleQuote": true,
     "trailingComma": "es5"
   },
-  "name": "react-async-cache",
   "author": "Daniel Lichtenstein",
   "module": "dist/react-async-cache.esm.js",
   "size-limit": [
