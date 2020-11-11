@@ -9,52 +9,31 @@ Array [
     "version": 1,
   },
   Object {
+    "a": 0,
+    "b": 0,
+    "version": 2,
+  },
+  Object {
     "a": 1,
     "b": 0,
-    "version": 1,
+    "version": 2,
   },
   Object {
     "a": 1,
     "b": 1,
-    "version": 1,
+    "version": 2,
   },
   Object {
     "a": 2,
     "b": 1,
-    "version": 1,
-  },
-  Object {
-    "a": 3,
-    "b": 1,
-    "version": 1,
-  },
-  Object {
-    "a": 3,
-    "b": 2,
-    "version": 1,
-  },
-  Object {
-    "a": 4,
-    "b": 2,
-    "version": 1,
-  },
-  Object {
-    "a": 4,
-    "b": 3,
-    "version": 1,
-  },
-  Object {
-    "a": 4,
-    "b": 4,
-    "version": 1,
-  },
-  Object {
-    "a": 4,
-    "b": 4,
     "version": 2,
   },
   Object {
-    "c": 8,
+    "c": 3,
+    "version": 3,
+  },
+  Object {
+    "c": 4,
     "version": 3,
   },
 ]

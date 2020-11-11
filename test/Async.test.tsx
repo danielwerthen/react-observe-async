@@ -8,8 +8,8 @@ function sleep(ms: number) {
 
 describe('Thing', () => {
   it('renders without crashing', async () => {
-    const interval1 = interval(10).pipe(take(5));
-    const interval2 = interval(15).pipe(take(5));
+    const interval1 = interval(200).pipe(take(3));
+    const interval2 = interval(250).pipe(take(3));
     const factories = new Subject<AsyncFactory<any>>();
     const observable = observeAsync(factories);
     const result = observable
