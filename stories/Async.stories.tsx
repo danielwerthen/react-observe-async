@@ -1,6 +1,7 @@
 import React from 'react';
 import { Meta, Story } from '@storybook/react';
 import { useAsync } from '../src';
+import { interval } from 'rxjs';
 
 function asyncQuery(text: string): Promise<string> {
   return new Promise(resolve =>
@@ -8,22 +9,23 @@ function asyncQuery(text: string): Promise<string> {
   );
 }
 
+const inty = interval(1000);
+const inty2 = interval(2000);
+
 function AsyncComponent({ input }: any) {
-  const { response = [] } = useAsync(
-    async cache => {
-      await cache.refresh('textbox');
-      const data = await cache(() => asyncQuery('textbox'), 'textbox');
-      const data2 = await cache(() => asyncQuery('slider'), 'slider');
-      const extra = input
-        ? await cache(() => asyncQuery(input), 'input|' + input)
-        : 'No input';
-      return [data, data2, extra];
+  const { result = [] } = useAsync(
+    observe => {
+      return Promise.all([
+        asyncQuery('Test'),
+        observe(inty),
+        observe(inty2),
+      ]) as Promise<any[]>;
     },
     [input]
   );
   return (
     <div>
-      {response.map((res, idx) => (
+      {result.map((res, idx) => (
         <p key={idx}>{res}</p>
       ))}
     </div>

@@ -26,7 +26,7 @@ import {
   Subject,
   Subscription,
 } from 'rxjs';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 /**
  * Credit to: https://github.com/ReactiveX/rxjs/issues/5004
@@ -194,6 +194,19 @@ export function observeAsync<T, ERR = unknown>(
       );
     })
   );
+}
+
+export function useAsync<T>(factory: AsyncFactory<T>, dependencies: unknown[]) {
+  const callback = useCallback(factory, dependencies);
+  const factories = useObservedProp(callback);
+  const observable = useMemo(() => observeAsync(factories), [factories]);
+  return useSubscribe(observable, {
+    pending: true,
+    refresh: async () => {
+      const res = await observable.pipe(take(1)).toPromise();
+      return await res.refresh();
+    },
+  });
 }
 
 export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
