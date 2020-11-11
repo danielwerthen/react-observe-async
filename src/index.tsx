@@ -1,12 +1,15 @@
 import {
   catchError,
+  distinctUntilChanged,
   exhaustMap,
   filter,
   finalize,
   map,
   publishReplay,
+  refCount,
   skip,
   startWith,
+  switchMap,
   take,
   tap,
   throttle,
@@ -23,6 +26,7 @@ import {
   Subject,
   Subscription,
 } from 'rxjs';
+import { useEffect, useMemo, useState } from 'react';
 
 /**
  * Credit to: https://github.com/ReactiveX/rxjs/issues/5004
@@ -54,7 +58,7 @@ export type AsyncResult<T, ERR> = {
   pending?: boolean;
   result?: T;
   error?: ERR;
-  refresh: () => Promise<T>;
+  refresh: () => Promise<T | undefined>;
 };
 
 export type ObserveValue = <T>(input: Observable<T>) => Promise<T>;
@@ -132,55 +136,121 @@ class FactoryObserver {
 export function observeAsync<T, ERR = unknown>(
   factories: Observable<AsyncFactory<T>>
 ): Observable<AsyncResult<T, ERR>> {
-  const observer = new FactoryObserver();
-  const lastResult = new BehaviorSubject<T | undefined>(undefined);
-  const refreshTrigger = new Subject();
-  const refresh = () => {
-    refreshTrigger.next();
-    function guard(item: any): item is T {
-      return item !== undefined;
-    }
-    return lastResult
-      .pipe(skip(1), filter<T | undefined, T>(guard), take(1))
-      .toPromise();
-  };
-  let isComplete = false;
-  return combineLatest([
-    factories.pipe(finalize(() => (isComplete = true))),
-    observer.trigger.pipe(startWith(0)),
-    refreshTrigger.pipe(startWith(0)),
-  ]).pipe(
-    exhaustMapWithTrailing(([factory]) => {
-      const keys: symbol[] = [];
-      const result = factory(input => {
-        return observer.observe(input, key => keys.push(key));
-      });
-      return from(result).pipe(tap(() => observer.unsubscribe(keys)));
-    }),
-    tap(result => lastResult.next(result)),
-    map(result => ({ result })),
-    catchError(err => of({ error: err as ERR })),
-    startWith({
-      pending: true,
-      ...(lastResult.value !== undefined && { result: lastResult.value }),
-    }),
-    map(res => ({
-      ...res,
-      refresh,
-    })),
-    tap(() => {
-      if (observer.isComplete() && isComplete) {
-        observer.trigger.complete();
-        refreshTrigger.complete();
-        lastResult.complete();
-      }
-    }),
+  return of(0).pipe(
+    switchMap(() => {
+      const observer = new FactoryObserver();
+      const lastResult = new BehaviorSubject<T | undefined>(undefined);
+      const refreshTrigger = new Subject();
+      const refresh = () => {
+        if (lastResult.isStopped) {
+          return Promise.resolve(lastResult.value);
+        }
+        refreshTrigger.next();
+        function guard(item: any): item is T {
+          return item !== undefined;
+        }
+        return lastResult
+          .pipe(skip(1), filter<T | undefined, T>(guard), take(1))
+          .toPromise();
+      };
+      let isComplete = false;
+      return combineLatest([
+        factories.pipe(finalize(() => (isComplete = true))),
+        observer.trigger.pipe(startWith(0)),
+        refreshTrigger.pipe(startWith(0)),
+      ]).pipe(
+        exhaustMapWithTrailing(([factory]) => {
+          const keys: symbol[] = [];
+          const result = factory(input => {
+            return observer.observe(input, key => keys.push(key));
+          });
+          return from(result).pipe(tap(() => observer.unsubscribe(keys)));
+        }),
+        tap(result => lastResult.next(result)),
+        map(result => ({ result })),
+        catchError(err => of({ error: err as ERR })),
+        startWith({
+          pending: true,
+          ...(lastResult.value !== undefined && { result: lastResult.value }),
+        }),
+        map(res => ({
+          ...res,
+          refresh,
+        })),
+        tap(() => {
+          if (observer.isComplete() && isComplete) {
+            observer.trigger.complete();
+            refreshTrigger.complete();
+            lastResult.complete();
+          }
+        }),
 
-    finalize<AsyncResult<T, ERR>>(() => {
-      observer.unsubscribe();
-      observer.trigger.complete();
-      refreshTrigger.complete();
-      lastResult.complete();
+        finalize<AsyncResult<T, ERR>>(() => {
+          observer.unsubscribe();
+          observer.trigger.complete();
+          refreshTrigger.complete();
+          lastResult.complete();
+        })
+      );
     })
   );
+}
+
+export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
+  const [state, setState] = useState(initialValue);
+  useEffect(() => {
+    const sub = observable.pipe(distinctUntilChanged()).subscribe(setState);
+    return () => sub.unsubscribe();
+  }, [observable]);
+  return state;
+}
+
+export type SharedAsync<INPUT, OUTPUT, ERR = unknown> = {
+  (input: INPUT): Observable<AsyncResult<OUTPUT, ERR>>;
+  useSubscribe(input: INPUT): AsyncResult<OUTPUT, ERR>;
+};
+
+export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
+  factory,
+  getKey,
+}: {
+  factory: (input: INPUT) => AsyncFactory<OUTPUT>;
+  getKey: (input: INPUT) => string;
+}): SharedAsync<INPUT, OUTPUT, ERR> {
+  const store: { [key: string]: Observable<AsyncResult<OUTPUT, ERR>> } = {};
+  const getResource = (input: INPUT) => {
+    const key = getKey(input);
+    return (
+      store[key] ||
+      (store[key] = observeAsync<OUTPUT, ERR>(of(factory(input))).pipe(
+        finalize(() => delete store[key]),
+        publishReplay(1),
+        refCount()
+      ))
+    );
+  };
+  return Object.assign(getResource, {
+    useSubscribe(input: INPUT) {
+      const resource = getResource(input);
+      return useSubscribe(resource, {
+        pending: true,
+        refresh: async () => {
+          const res = await resource.pipe(take(1)).toPromise();
+          return await res.refresh();
+        },
+      });
+    },
+  });
+}
+
+export function useObservedProp<A>(a: A): BehaviorSubject<A> {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const subject = useMemo(() => new BehaviorSubject<A>(a), []);
+  useEffect(() => {
+    if (subject.value !== a) {
+      subject.next(a);
+    }
+  }, [a, subject]);
+  useEffect(() => () => subject.complete(), [subject]);
+  return subject;
 }
