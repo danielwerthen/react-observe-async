@@ -256,7 +256,7 @@ export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
   });
 }
 
-export function useObservedProp<A>(a: A): BehaviorSubject<A> {
+export function useObservedProp<A>(a: A): Observable<A> {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const subject = useMemo(() => new BehaviorSubject<A>(a), []);
   useEffect(() => {
@@ -265,5 +265,24 @@ export function useObservedProp<A>(a: A): BehaviorSubject<A> {
     }
   }, [a, subject]);
   useEffect(() => () => subject.complete(), [subject]);
-  return subject;
+  return useMemo(() => subject.asObservable(), [subject]);
+}
+
+export function createSharedState<T>(initialValue: T) {
+  const subject = new BehaviorSubject(initialValue);
+  const setState = (value: T | ((prev: T) => T)) => {
+    if (value instanceof Function) {
+      subject.next(value(subject.value));
+    } else {
+      subject.next(value);
+    }
+  };
+  return Object.assign(subject.asObservable(), {
+    useState() {
+      return useSubscribe(subject, subject.value);
+    },
+    useSetState() {
+      return setState;
+    },
+  });
 }
