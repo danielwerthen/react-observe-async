@@ -256,6 +256,59 @@ export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
   });
 }
 
+export type SharedObservable<INPUT, OUTPUT> = {
+  (input: INPUT): Observable<OUTPUT>;
+  refresh(input: INPUT): Promise<OUTPUT | undefined>;
+};
+
+export function createSharedObservable<INPUT, OUTPUT>({
+  factory,
+  getKey,
+}: {
+  factory: (input: INPUT) => Observable<OUTPUT>;
+  getKey: (input: INPUT) => string;
+}): SharedObservable<INPUT, OUTPUT> {
+  const store: { [key: string]: Observable<OUTPUT> } = {};
+  const refreshTokens: { [key: string]: Subject<void> } = {};
+  const getResource = (input: INPUT) => {
+    const key = getKey(input);
+    if (!store[key]) {
+      if (refreshTokens[key] && !refreshTokens[key].isStopped) {
+        refreshTokens[key].complete();
+      }
+      const refresh = (refreshTokens[key] = new Subject());
+      store[key] = refresh.pipe(
+        startWith(0),
+        exhaustMapWithTrailing(() => factory(input)),
+        finalize(() => {
+          delete store[key];
+          refresh.complete();
+          delete refreshTokens[key];
+        }),
+        publishReplay(1),
+        refCount()
+      );
+    }
+    return store[key];
+  };
+  return Object.assign(getResource, {
+    refresh(input: INPUT) {
+      const key = getKey(input);
+      const refresh = refreshTokens[key];
+      if (!refresh) {
+        return Promise.resolve(undefined);
+      }
+      const obs = store[key];
+      if (!obs) {
+        return Promise.resolve(undefined);
+      }
+      const res = obs.pipe(take(1)).toPromise();
+      refresh.next();
+      return res;
+    },
+  });
+}
+
 export function useObservedProp<A>(a: A): Observable<A> {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const subject = useMemo(() => new BehaviorSubject<A>(a), []);
