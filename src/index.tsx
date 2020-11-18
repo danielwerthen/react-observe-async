@@ -1,5 +1,6 @@
 import {
   catchError,
+  concatMap,
   distinctUntilChanged,
   exhaustMap,
   filter,
@@ -26,6 +27,7 @@ import {
   Subject,
   Subscription,
 } from 'rxjs';
+import { fromFetch } from 'rxjs/fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 /**
@@ -256,22 +258,22 @@ export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
   });
 }
 
-export type SharedObservable<INPUT, OUTPUT> = {
-  (input: INPUT): Observable<OUTPUT>;
-  refresh(input: INPUT): Promise<OUTPUT | undefined>;
+export type SharedObservable<OUTPUT, INPUT extends unknown[]> = {
+  (...input: INPUT): Observable<OUTPUT>;
+  refresh(...input: INPUT): Promise<OUTPUT | undefined>;
 };
 
-export function createSharedObservable<INPUT, OUTPUT>({
+export function createSharedObservable<OUTPUT, INPUT extends unknown[]>({
   factory,
   getKey,
 }: {
-  factory: (input: INPUT) => Observable<OUTPUT>;
-  getKey: (input: INPUT) => string;
-}): SharedObservable<INPUT, OUTPUT> {
+  factory: (...inputs: INPUT) => Observable<OUTPUT>;
+  getKey: (...input: INPUT) => string;
+}): SharedObservable<OUTPUT, INPUT> {
   const store: { [key: string]: Observable<OUTPUT> } = {};
   const refreshTokens: { [key: string]: Subject<void> } = {};
-  const getResource = (input: INPUT) => {
-    const key = getKey(input);
+  const getResource = (...input: INPUT) => {
+    const key = getKey(...input);
     if (!store[key]) {
       if (refreshTokens[key] && !refreshTokens[key].isStopped) {
         refreshTokens[key].complete();
@@ -279,7 +281,7 @@ export function createSharedObservable<INPUT, OUTPUT>({
       const refresh = (refreshTokens[key] = new Subject());
       store[key] = refresh.pipe(
         startWith(0),
-        exhaustMapWithTrailing(() => factory(input)),
+        exhaustMapWithTrailing(() => factory(...input)),
         finalize(() => {
           delete store[key];
           refresh.complete();
@@ -292,8 +294,8 @@ export function createSharedObservable<INPUT, OUTPUT>({
     return store[key];
   };
   return Object.assign(getResource, {
-    refresh(input: INPUT) {
-      const key = getKey(input);
+    refresh(...input: INPUT) {
+      const key = getKey(...input);
       const refresh = refreshTokens[key];
       if (!refresh) {
         return Promise.resolve(undefined);
@@ -332,10 +334,39 @@ export function createSharedState<T>(initialValue: T) {
   };
   return Object.assign(subject.asObservable(), {
     useState() {
-      return useSubscribe(subject, subject.value);
+      return [useSubscribe(subject, subject.value), setState];
     },
-    useSetState() {
-      return setState;
+  });
+}
+
+function defaultGetKey(input: string, query?: { [key: string]: string }) {
+  const search = query ? '?' + new URLSearchParams(query).toString() : '';
+  return input + search;
+}
+
+export type SharedFetch<T> = SharedObservable<
+  T,
+  [string] | [string, { [key: string]: string }]
+>;
+
+export function createSharedFetch<T>(
+  init: Observable<RequestInit>,
+  selector: (response: Response) => Promise<T>,
+  fetchFn: typeof fromFetch = fromFetch,
+  getKey: typeof defaultGetKey = defaultGetKey
+): SharedFetch<T> {
+  return createSharedObservable({
+    factory: (input: string, query?: { [key: string]: string }) => {
+      const search = query ? '?' + new URLSearchParams(query).toString() : '';
+      return from(init).pipe(
+        concatMap(init => {
+          return fetchFn(input + search, {
+            ...init,
+            selector,
+          });
+        })
+      );
     },
+    getKey,
   });
 }
