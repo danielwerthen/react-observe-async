@@ -1,7 +1,7 @@
 import 'react-app-polyfill/ie11';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { useAsync, createSharedFetch, createSharedState } from '../.';
+import { createSharedFetch, createSharedState, useAsync } from '../.';
 import { map } from 'rxjs/operators';
 
 interface TodoInterface {
@@ -10,32 +10,22 @@ interface TodoInterface {
 }
 
 const authToken = createSharedState<string | undefined>(undefined);
-
-const fetchJson = createSharedFetch(
-  authToken.pipe(
-    map(auth => ({
-      headers: {
-        Auth: 'bearer ' + auth,
-      },
-    }))
-  ),
-  response => response.json()
+const init = authToken.pipe(
+  map(auth => ({
+    headers: {
+      Auth: 'bearer ' + auth,
+    },
+  }))
 );
 
-const todos = (todoId: string) => {
-  return fetchJson(`https://jsonplaceholder.typicode.com/todos/${todoId}`, {
-    search: '5',
-  }).pipe(map(data => data as TodoInterface));
-};
+const todos = createSharedFetch(
+  init,
+  (todoId: string) => `https://jsonplaceholder.typicode.com/todos/${todoId}`,
+  response => response.json() as Promise<TodoInterface>
+);
 
 const Todo = ({ id }: { id: string }) => {
-  const { result, pending } = useAsync(
-    async observe => {
-      const res = await observe(todos(id));
-      return res;
-    },
-    [id]
-  );
+  const { result, pending } = todos.useSubscribe(id);
   if (pending || !result) {
     return <p>Loading</p>;
   }
@@ -46,11 +36,19 @@ const Todo = ({ id }: { id: string }) => {
   );
 };
 
+let c = 0;
+
 const Thing = () => {
   const [state, setState] = React.useState(0);
+  const { result: body } = useAsync(async observe => {
+    const { result: todo } = await observe(todos('1'));
+    return `Todo name ${todo?.title}, iterator: ${c++}`;
+  }, []);
   return (
     <div>
       <button onClick={() => setState(c => c + 1)}>Click me</button>
+      <button onClick={() => todos.refresh('1')}>Click me</button>
+      {body}
       {new Array(state % 2 === 0 ? 100 : 0).fill(0).map((_v, idx) => (
         <Todo key={idx} id={Math.round(Math.random() * 2 + 1).toString()} />
       ))}

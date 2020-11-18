@@ -1,6 +1,5 @@
 import {
   catchError,
-  concatMap,
   distinctUntilChanged,
   exhaustMap,
   filter,
@@ -339,34 +338,50 @@ export function createSharedState<T>(initialValue: T) {
   });
 }
 
-function defaultGetKey(input: string, query?: { [key: string]: string }) {
-  const search = query ? '?' + new URLSearchParams(query).toString() : '';
-  return input + search;
-}
+export type SharedFetch<INPUT extends unknown[], OUTPUT, ERR = unknown> = {
+  (...input: INPUT): Observable<AsyncResult<OUTPUT, ERR>>;
+  useSubscribe(...input: INPUT): AsyncResult<OUTPUT, ERR>;
+  refresh(...input: INPUT): Promise<OUTPUT | undefined>;
+};
 
-export type SharedFetch<T> = SharedObservable<
-  T,
-  [string] | [string, { [key: string]: string }]
->;
-
-export function createSharedFetch<T>(
-  init: Observable<RequestInit>,
-  selector: (response: Response) => Promise<T>,
-  fetchFn: typeof fromFetch = fromFetch,
-  getKey: typeof defaultGetKey = defaultGetKey
-): SharedFetch<T> {
-  return createSharedObservable({
-    factory: (input: string, query?: { [key: string]: string }) => {
-      const search = query ? '?' + new URLSearchParams(query).toString() : '';
-      return from(init).pipe(
-        concatMap(init => {
-          return fetchFn(input + search, {
+export function createSharedFetch<T, INPUT extends unknown[]>(
+  init$: Observable<RequestInit>,
+  request: (...input: INPUT) => string,
+  selector: (response: Response) => Promise<T>
+): SharedFetch<INPUT, T> {
+  const shared = createSharedAsync({
+    factory(input: string) {
+      return async observe => {
+        const init = await observe(init$);
+        return observe(
+          fromFetch(input, {
             ...init,
             selector,
-          });
-        })
-      );
+          })
+        );
+      };
     },
-    getKey,
+    getKey(input: string) {
+      return input;
+    },
   });
+  return Object.assign(
+    (...input: INPUT) => {
+      const url = request(...input);
+      return shared(url);
+    },
+    {
+      useSubscribe(...input: INPUT) {
+        const url = request(...input);
+        return shared.useSubscribe(url);
+      },
+      async refresh(...input: INPUT) {
+        const url = request(...input);
+        const res = await shared(url)
+          .pipe(take(1))
+          .toPromise();
+        return await res.refresh();
+      },
+    }
+  );
 }
