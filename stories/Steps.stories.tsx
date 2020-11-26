@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Meta, Story } from '@storybook/react';
-import { useAsync } from '../src';
+import { AsyncFactory, useAsync } from '../src';
 import { interval } from 'rxjs';
 import { take } from 'rxjs/operators';
 
@@ -10,28 +10,21 @@ function asyncQuery(text: string): Promise<string> {
   );
 }
 
-const test = interval(1000).pipe(take(10));
+const test = interval(1000).pipe(take(20));
+
+const factory: AsyncFactory<string> = async observe => {
+  const id = await observe(test);
+
+  return await asyncQuery('Text' + Math.floor(id / 2));
+};
 
 function StepsComponent({ input }: any) {
-  const result = useAsync(
-    async observe => {
-      const id = await observe(test);
-      if (id > 3) {
-        throw new Error('Invalid state' + id);
-      }
-      return Promise.all([asyncQuery('Test' + id)]) as Promise<any[]>;
-    },
-    [input]
-  );
+  const result = useAsync(factory, [input]);
   const steps = useMemo(() => [], []);
-  steps.push(steps.length > 8 ? result : result.result || 'none');
+  steps.push(result.result);
   return (
     <div>
-      <button onClick={() => result.refresh()}>Refresh</button>
-      {result.error && <p>Error: {result.error.toString()}</p>}
-      {steps.map((res, idx) => (
-        <pre key={idx}>{JSON.stringify(res)}</pre>
-      ))}
+      <pre>{JSON.stringify(steps, null, '  ')}</pre>
     </div>
   );
 }

@@ -25,8 +25,8 @@ import {
   Subject,
   Subscription,
 } from 'rxjs';
-import { fromFetch } from 'rxjs/fetch';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { fromFetch as defaultFromFetch } from 'rxjs/fetch';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * Credit to: https://github.com/ReactiveX/rxjs/issues/5004
@@ -215,22 +215,24 @@ export type AsyncResultWithRefresh<T, ERR> = AsyncResult<T, ERR> & {
   refresh: () => Promise<T>;
 };
 
-export function useAsync<T, ERR>(
-  factory: AsyncFactory<T>,
-  dependencies: unknown[]
-): AsyncResultWithRefresh<T, ERR> {
-  const callback = useCallback(factory, dependencies);
-  const monitor = useMemo(() => new Monitor(), []);
-  const [factories, refresh] = useObservedProp(callback);
-  const observable = useMemo(() => {
-    return factories.pipe(observeAsync<T, ERR>(), publishReplay(1), refCount());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [factories]);
-  const handleRefresh = useCallback(() => {
+export function observeAsyncWithRefresh<T, ERR = unknown>(
+  factories: Observable<AsyncFactory<T>>,
+  finalizeFn: () => void = () => void 0
+): [Observable<AsyncResult<T, ERR>>, () => Promise<T>] {
+  const refreshTrigger = new Subject();
+  const root = refreshTrigger.pipe(
+    startWith(0),
+    switchMap(() => factories),
+    observeAsync<T, ERR>(),
+    finalize(finalizeFn),
+    publishReplay(1),
+    refCount()
+  );
+  const refresh = () => {
     function guard(item: any): item is T {
       return item !== undefined;
     }
-    const promise = observable
+    const promise = root
       .pipe(
         skip(1),
         map(item => item.result),
@@ -238,11 +240,26 @@ export function useAsync<T, ERR>(
         take(1)
       )
       .toPromise();
-    refresh((v: AsyncFactory<T>) => v);
+    refreshTrigger.next();
     return promise;
+  };
+  return [root, refresh];
+}
+
+export function useAsync<T, ERR>(
+  factory: AsyncFactory<T>,
+  dependencies: unknown[]
+): AsyncResultWithRefresh<T, ERR> {
+  const callback = useCallback(factory, dependencies);
+  const monitor = useMemo(() => new Monitor(), []);
+  const factories = useObservedProp(callback);
+  const [observable, handleRefresh] = useMemo(() => {
+    return observeAsyncWithRefresh<T, ERR>(factories);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [observable, refresh]);
+  }, [factories]);
   const [output, setOutput] = useState<AsyncResult<T, ERR>>({ pending: true });
+  const outputRef = useRef<AsyncResult<T, ERR>>(output);
+  outputRef.current = output;
   useEffect(() => {
     const sub = observable.subscribe(item => {
       if (item.pending) {
@@ -250,11 +267,18 @@ export function useAsync<T, ERR>(
           setOutput(item);
         }
       } else {
-        setOutput(item);
+        const old = outputRef.current;
+        if (
+          old.result !== item.result ||
+          old.error !== item.error ||
+          old.pending !== item.pending
+        ) {
+          setOutput(item);
+        }
       }
     });
     return () => sub.unsubscribe();
-  }, [observable, monitor]);
+  }, [observable, monitor, outputRef]);
   const final = useMemo(
     () =>
       monitor.wrap({
@@ -272,30 +296,6 @@ export function useAsync<T, ERR>(
   return final;
 }
 
-export function useConnectableSubscribe<T>(
-  observable: Observable<T>,
-  initialValue: T
-): [T, () => void] {
-  const activator = useMemo(() => new Subject(), []);
-  const [state, setState] = useState<T>(initialValue);
-  const activate = useCallback(() => {
-    if (activator.isStopped) {
-      return;
-    }
-    activator.next(0);
-    activator.complete();
-  }, [activator]);
-  useEffect(() => {
-    if (activator.isStopped) {
-      const sub = observable.subscribe(setState);
-      return () => sub.unsubscribe();
-    }
-    const sub = activator.pipe(switchMap(() => observable)).subscribe(setState);
-    return () => sub.unsubscribe();
-  }, [activator, observable]);
-  return [state, activate];
-}
-
 export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
   const [state, setState] = useState(initialValue);
   useEffect(() => {
@@ -305,95 +305,63 @@ export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
   return state;
 }
 
-export type SharedAsync<INPUT, OUTPUT, ERR = unknown> = {
-  (input: INPUT): Observable<AsyncResult<OUTPUT, ERR>>;
-  useSubscribe(input: INPUT): AsyncResult<OUTPUT, ERR>;
+export type SharedAsync<OUTPUT, ERR = unknown> = Observable<
+  AsyncResult<OUTPUT, ERR>
+> & {
+  useSubscribe(): AsyncResult<OUTPUT, ERR>;
+  refresh(): Promise<OUTPUT>;
+  unsubscribe(): void;
 };
 
-export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
+export function shareAsync<OUTPUT, ERR = unknown>(
+  factory: AsyncFactory<OUTPUT>,
+  finalizeFn: () => void = () => void 0
+): SharedAsync<OUTPUT, ERR> {
+  const [observable, refresh] = observeAsyncWithRefresh<OUTPUT, ERR>(
+    of(factory),
+    finalizeFn
+  );
+  const subject = new BehaviorSubject({ pending: true });
+  const sub = observable.subscribe(subject);
+  return Object.assign(observable, {
+    useSubscribe() {
+      return useSubscribe(subject, subject.value);
+    },
+    refresh() {
+      return refresh();
+    },
+    unsubscribe() {
+      sub.unsubscribe();
+      subject.complete();
+    },
+  });
+}
+
+export function sharedAsyncFactory<INPUT, OUTPUT, ERR = unknown>({
   factory,
   getKey,
 }: {
   factory: (input: INPUT) => AsyncFactory<OUTPUT>;
   getKey: (input: INPUT) => string;
-}): SharedAsync<INPUT, OUTPUT, ERR> {
-  const store: { [key: string]: Observable<AsyncResult<OUTPUT, ERR>> } = {};
+}): (input: INPUT) => SharedAsync<OUTPUT, ERR> {
+  const store: {
+    [key: string]: SharedAsync<OUTPUT, ERR>;
+  } = {};
   const getResource = (input: INPUT) => {
     const key = getKey(input);
-    return (
-      store[key] ||
-      (store[key] = of(factory(input)).pipe(
-        observeAsync<OUTPUT, ERR>(),
-        finalize(() => delete store[key]),
-        publishReplay(1),
-        refCount()
-      ))
-    );
-  };
-  return Object.assign(getResource, {
-    useSubscribe(input: INPUT) {
-      const resource = getResource(input);
-      return useSubscribe(resource, { pending: true });
-    },
-  });
-}
-
-export type SharedObservable<OUTPUT, INPUT extends unknown[]> = {
-  (...input: INPUT): Observable<OUTPUT>;
-  refresh(...input: INPUT): Promise<OUTPUT | undefined>;
-};
-
-export function createSharedObservable<OUTPUT, INPUT extends unknown[]>({
-  factory,
-  getKey,
-}: {
-  factory: (...inputs: INPUT) => Observable<OUTPUT>;
-  getKey: (...input: INPUT) => string;
-}): SharedObservable<OUTPUT, INPUT> {
-  const store: { [key: string]: Observable<OUTPUT> } = {};
-  const refreshTokens: { [key: string]: Subject<void> } = {};
-  const getResource = (...input: INPUT) => {
-    const key = getKey(...input);
     if (!store[key]) {
-      if (refreshTokens[key] && !refreshTokens[key].isStopped) {
-        refreshTokens[key].complete();
-      }
-      const refresh = (refreshTokens[key] = new Subject());
-      store[key] = refresh.pipe(
-        startWith(0),
-        exhaustMapWithTrailing(() => factory(...input)),
-        finalize(() => {
-          delete store[key];
-          refresh.complete();
-          delete refreshTokens[key];
-        }),
-        publishReplay(1),
-        refCount()
+      const res = shareAsync<OUTPUT, ERR>(
+        factory(input),
+        () => delete store[key]
       );
+      store[key] = res;
     }
     return store[key];
   };
-  return Object.assign(getResource, {
-    refresh(...input: INPUT) {
-      const key = getKey(...input);
-      const refresh = refreshTokens[key];
-      if (!refresh) {
-        return Promise.resolve(undefined);
-      }
-      const obs = store[key];
-      if (!obs) {
-        return Promise.resolve(undefined);
-      }
-      const res = obs.pipe(take(1)).toPromise();
-      refresh.next();
-      return res;
-    },
-  });
+  return getResource;
 }
 
-export function useObservedProp<A>(
-  a: A
-): [Observable<A>, (value: A | ((prev: A) => A)) => void] {
+export function useObservedProp<A>(a: A): Observable<A> {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const subject = useMemo(() => new BehaviorSubject<A>(a), []);
   useEffect(() => {
@@ -402,19 +370,7 @@ export function useObservedProp<A>(
     }
   }, [a, subject]);
   useEffect(() => () => subject.complete(), [subject]);
-  return useMemo(
-    () => [
-      subject.asObservable(),
-      value => {
-        if (value instanceof Function) {
-          subject.next(value(subject.value));
-        } else {
-          subject.next(value);
-        }
-      },
-    ],
-    [subject]
-  );
+  return useMemo(() => subject.asObservable(), [subject]);
 }
 
 export function createSharedState<T>(initialValue: T) {
@@ -437,14 +393,16 @@ export function createSharedState<T>(initialValue: T) {
 export type SharedFetch<INPUT extends unknown[], OUTPUT, ERR = unknown> = {
   (...input: INPUT): Observable<AsyncResult<OUTPUT, ERR>>;
   useSubscribe(...input: INPUT): AsyncResult<OUTPUT, ERR>;
+  refresh(...input: INPUT): Promise<OUTPUT>;
 };
 
-export function createSharedFetch<T, INPUT extends unknown[]>(
+export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   init$: Observable<RequestInit>,
   request: (...input: INPUT) => string,
-  selector: (response: Response) => Promise<T>
-): SharedFetch<INPUT, T> {
-  const shared = createSharedAsync({
+  selector: (response: Response) => Promise<T>,
+  fromFetch: typeof defaultFromFetch = defaultFromFetch
+): (...input: INPUT) => SharedAsync<T, ERR> {
+  const shared = sharedAsyncFactory<string, T, ERR>({
     factory(input: string) {
       return async observe => {
         const init = await observe(init$);
@@ -460,16 +418,7 @@ export function createSharedFetch<T, INPUT extends unknown[]>(
       return input;
     },
   });
-  return Object.assign(
-    (...input: INPUT) => {
-      const url = request(...input);
-      return shared(url);
-    },
-    {
-      useSubscribe(...input: INPUT) {
-        const url = request(...input);
-        return shared.useSubscribe(url);
-      },
-    }
-  );
+  return (...input: INPUT) => {
+    return shared(request(...input));
+  };
 }

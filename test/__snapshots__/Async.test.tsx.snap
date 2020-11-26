@@ -1,0 +1,24 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Thing renders without crashing 1`] = `
+Array [
+  Object {
+    "pending": false,
+    "result": Object {
+      "alpha": 4,
+    },
+  },
+  Object {
+    "pending": true,
+    "result": Object {
+      "alpha": 4,
+    },
+  },
+  Object {
+    "pending": false,
+    "result": Object {
+      "alpha": 4,
+    },
+  },
+]
+`;

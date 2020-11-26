@@ -11,7 +11,6 @@ describe('Thing', () => {
     const subject = new Subject();
     const factory: AsyncFactory<any> = async observe => {
       await observe(subject);
-      console.log('Attempt');
       await sleep(100);
       return { alpha: 4 };
     };
@@ -24,7 +23,6 @@ describe('Thing', () => {
     subject.complete();
     factories.complete();
     const final = await result;
-    console.log(final);
-    // expect(final).toMatchSnapshot();
+    expect(final).toMatchSnapshot();
   });
 });
