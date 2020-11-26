@@ -1,5 +1,6 @@
 import {
   catchError,
+  concatMap,
   exhaustMap,
   filter,
   finalize,
@@ -390,12 +391,6 @@ export function createSharedState<T>(initialValue: T) {
   });
 }
 
-export type SharedFetch<INPUT extends unknown[], OUTPUT, ERR = unknown> = {
-  (...input: INPUT): Observable<AsyncResult<OUTPUT, ERR>>;
-  useSubscribe(...input: INPUT): AsyncResult<OUTPUT, ERR>;
-  refresh(...input: INPUT): Promise<OUTPUT>;
-};
-
 export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   init$: Observable<RequestInit>,
   request: (...input: INPUT) => string,
@@ -421,4 +416,63 @@ export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   return (...input: INPUT) => {
     return shared(request(...input));
   };
+}
+
+function isPromise<T>(obj: any): obj is Promise<T> {
+  return obj && typeof obj.then === 'function';
+}
+
+function isObservable<T>(obj: any): obj is Observable<T> {
+  return obj && typeof obj.subscribe === 'function';
+}
+
+export type AsyncState<T> = Observable<T> & {
+  dispatch: (action: (v: T) => T | Promise<T> | Observable<T>) => Observable<T>;
+  unsubscribe: () => void;
+};
+
+export function asyncState<T>(initialValue: T): AsyncState<T> {
+  const queue = new Subject<
+    [
+      (v: T) => T | Promise<T> | Observable<T>,
+      (r: T | Promise<T> | Observable<T>) => void
+    ]
+  >();
+  const state$ = new BehaviorSubject<T>(initialValue);
+  const sub = queue
+    .pipe(
+      concatMap(([applicator, resolver]) => {
+        const next = applicator(state$.value);
+        resolver(next);
+        if (isObservable(next)) {
+          return next;
+        } else if (isPromise(next)) {
+          return from(next);
+        }
+        return of(next);
+      })
+    )
+    .subscribe(state$);
+  return Object.assign(state$.asObservable(), {
+    dispatch(action: (v: T) => T | Promise<T> | Observable<T>) {
+      return from(
+        new Promise<T | Promise<T> | Observable<T>>(resolve => {
+          queue.next([action, resolve]);
+        })
+      ).pipe(
+        concatMap(res => {
+          if (isObservable(res)) {
+            return res;
+          } else if (isPromise(res)) {
+            return from(res);
+          }
+          return of(res);
+        })
+      );
+    },
+    unsubscribe() {
+      sub.unsubscribe();
+      state$.complete();
+    },
+  });
 }
