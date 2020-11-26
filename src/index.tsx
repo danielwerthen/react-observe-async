@@ -1,6 +1,5 @@
 import {
   catchError,
-  distinctUntilChanged,
   exhaustMap,
   finalize,
   map,
@@ -8,6 +7,7 @@ import {
   refCount,
   skip,
   startWith,
+  switchMap,
   take,
   tap,
   throttle,
@@ -54,6 +54,7 @@ function exhaustMapWithTrailing<T, R>(
 }
 
 export type AsyncResult<T, ERR> = {
+  pending: boolean;
   result?: T;
   error?: ERR;
 };
@@ -132,30 +133,43 @@ class FactoryObserver {
   }
 }
 
-export function observeAsync<T, ERR = unknown>(
-  pending?: Subject<boolean>
-): OperatorFunction<AsyncFactory<T>, AsyncResult<T, ERR>> {
+export function observeAsync<T, ERR = unknown>(): OperatorFunction<
+  AsyncFactory<T>,
+  AsyncResult<T, ERR>
+> {
   return (source): Observable<AsyncResult<T, ERR>> => {
     const observer = new FactoryObserver();
     let isComplete = false;
+    let lastResult: T | undefined = undefined;
     return combineLatest([
       source.pipe(finalize(() => (isComplete = true))),
       observer.trigger.pipe(startWith(0)),
     ]).pipe(
-      tap(() => pending && !pending.isStopped && pending.next(true)),
       exhaustMapWithTrailing(([factory]) => {
         const keys: symbol[] = [];
         const result = factory(input => {
           return observer.observe(input, key => keys.push(key));
         });
-        return from(result).pipe(tap(() => observer.unsubscribe(keys)));
+        if (lastResult === undefined) {
+          return from(result).pipe(
+            tap(item => {
+              observer.unsubscribe(keys);
+              lastResult = item;
+            }),
+            map(result => ({ pending: false, result })),
+            catchError(err => of({ pending: false, error: err as ERR }))
+          );
+        }
+        return from(result).pipe(
+          tap(item => {
+            observer.unsubscribe(keys);
+            lastResult = item;
+          }),
+          map(result => ({ pending: false, result })),
+          startWith({ pending: true, result: lastResult }),
+          catchError(err => of({ pending: false, error: err as ERR }))
+        );
       }),
-      map(result => ({ result })),
-      catchError(err => of({ error: err as ERR })),
-      tap(() => pending && !pending.isStopped && pending.next(false)),
-      map(res => ({
-        ...res,
-      })),
       tap(() => {
         if (observer.isComplete() && isComplete) {
           observer.trigger.complete();
@@ -170,17 +184,85 @@ export function observeAsync<T, ERR = unknown>(
   };
 }
 
-export function useAsync<T>(factory: AsyncFactory<T>, dependencies: unknown[]) {
+class Monitor {
+  usingPending = false;
+  usingError = false;
+
+  wrap<T, ERR>(result: AsyncResult<T, ERR>) {
+    if (this.usingPending && this.usingError) {
+      return result;
+    }
+    return new Proxy(result, {
+      get: (target, prop, receiver) => {
+        switch (prop) {
+          case 'pending':
+            this.usingPending = true;
+            break;
+          case 'error':
+            this.usingError = true;
+            break;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }
+}
+
+export function useAsync<T, ERR>(
+  factory: AsyncFactory<T>,
+  dependencies: unknown[]
+): AsyncResult<T, ERR> {
   const callback = useCallback(factory, dependencies);
+  const monitor = useMemo(() => new Monitor(), []);
   const factories = useObservedProp(callback);
-  const observable = useMemo(() => factories.pipe(observeAsync()), [factories]);
-  return useSubscribe(observable, {});
+  const observable = useMemo(() => {
+    return factories.pipe(observeAsync<T, ERR>(), publishReplay(1), refCount());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factories]);
+  const [output, setOutput] = useState<AsyncResult<T, ERR>>({ pending: true });
+  useEffect(() => {
+    const sub = observable.subscribe(item => {
+      if (item.pending) {
+        if (monitor.usingPending) {
+          setOutput(item);
+        }
+      } else {
+        setOutput(item);
+      }
+    });
+    return () => sub.unsubscribe();
+  }, [observable, monitor]);
+  return useMemo(() => monitor.wrap(output), [monitor, output]);
+}
+
+export function useConnectableSubscribe<T>(
+  observable: Observable<T>,
+  initialValue: T
+): [T, () => void] {
+  const activator = useMemo(() => new Subject(), []);
+  const [state, setState] = useState<T>(initialValue);
+  const activate = useCallback(() => {
+    if (activator.isStopped) {
+      return;
+    }
+    activator.next(0);
+    activator.complete();
+  }, [activator]);
+  useEffect(() => {
+    if (activator.isStopped) {
+      const sub = observable.subscribe(setState);
+      return () => sub.unsubscribe();
+    }
+    const sub = activator.pipe(switchMap(() => observable)).subscribe(setState);
+    return () => sub.unsubscribe();
+  }, [activator, observable]);
+  return [state, activate];
 }
 
 export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
   const [state, setState] = useState(initialValue);
   useEffect(() => {
-    const sub = observable.pipe(distinctUntilChanged()).subscribe(setState);
+    const sub = observable.subscribe(setState);
     return () => sub.unsubscribe();
   }, [observable]);
   return state;
@@ -214,7 +296,7 @@ export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
   return Object.assign(getResource, {
     useSubscribe(input: INPUT) {
       const resource = getResource(input);
-      return useSubscribe(resource, {});
+      return useSubscribe(resource, { pending: true });
     },
   });
 }

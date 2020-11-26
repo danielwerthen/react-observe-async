@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 import { Meta, Story } from '@storybook/react';
 import { useAsync } from '../src';
+import { interval } from 'rxjs';
+import { take } from 'rxjs/operators';
 
 function asyncQuery(text: string): Promise<string> {
   return new Promise(resolve =>
@@ -8,15 +10,18 @@ function asyncQuery(text: string): Promise<string> {
   );
 }
 
+const test = interval(1000).pipe(take(10));
+
 function StepsComponent({ input }: any) {
   const result = useAsync(
-    observe => {
+    async observe => {
+      await observe(test);
       return Promise.all([asyncQuery('Test')]) as Promise<any[]>;
     },
     [input]
   );
   const steps = useMemo(() => [], []);
-  steps.push(result);
+  steps.push(steps.length > 8 ? result : result.result || 'none');
   return (
     <div>
       {steps.map((res, idx) => (
