@@ -1,6 +1,7 @@
 import {
   catchError,
   exhaustMap,
+  filter,
   finalize,
   map,
   publishReplay,
@@ -167,7 +168,9 @@ export function observeAsync<T, ERR = unknown>(): OperatorFunction<
           }),
           map(result => ({ pending: false, result })),
           startWith({ pending: true, result: lastResult }),
-          catchError(err => of({ pending: false, error: err as ERR }))
+          catchError(err =>
+            of({ pending: false, error: err as ERR, result: lastResult })
+          )
         );
       }),
       tap(() => {
@@ -188,7 +191,7 @@ class Monitor {
   usingPending = false;
   usingError = false;
 
-  wrap<T, ERR>(result: AsyncResult<T, ERR>) {
+  wrap<T, ERR>(result: AsyncResultWithRefresh<T, ERR>) {
     if (this.usingPending && this.usingError) {
       return result;
     }
@@ -208,17 +211,37 @@ class Monitor {
   }
 }
 
+export type AsyncResultWithRefresh<T, ERR> = AsyncResult<T, ERR> & {
+  refresh: () => Promise<T>;
+};
+
 export function useAsync<T, ERR>(
   factory: AsyncFactory<T>,
   dependencies: unknown[]
-): AsyncResult<T, ERR> {
+): AsyncResultWithRefresh<T, ERR> {
   const callback = useCallback(factory, dependencies);
   const monitor = useMemo(() => new Monitor(), []);
-  const factories = useObservedProp(callback);
+  const [factories, refresh] = useObservedProp(callback);
   const observable = useMemo(() => {
     return factories.pipe(observeAsync<T, ERR>(), publishReplay(1), refCount());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factories]);
+  const handleRefresh = useCallback(() => {
+    function guard(item: any): item is T {
+      return item !== undefined;
+    }
+    const promise = observable
+      .pipe(
+        skip(1),
+        map(item => item.result),
+        filter<T | undefined, T>(guard),
+        take(1)
+      )
+      .toPromise();
+    refresh((v: AsyncFactory<T>) => v);
+    return promise;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [observable, refresh]);
   const [output, setOutput] = useState<AsyncResult<T, ERR>>({ pending: true });
   useEffect(() => {
     const sub = observable.subscribe(item => {
@@ -232,7 +255,21 @@ export function useAsync<T, ERR>(
     });
     return () => sub.unsubscribe();
   }, [observable, monitor]);
-  return useMemo(() => monitor.wrap(output), [monitor, output]);
+  const final = useMemo(
+    () =>
+      monitor.wrap({
+        ...output,
+        refresh: handleRefresh,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [monitor, output, handleRefresh]
+  );
+  if (!monitor.usingError) {
+    if (output.error !== undefined) {
+      throw output.error;
+    }
+  }
+  return final;
 }
 
 export function useConnectableSubscribe<T>(
@@ -354,7 +391,9 @@ export function createSharedObservable<OUTPUT, INPUT extends unknown[]>({
   });
 }
 
-export function useObservedProp<A>(a: A): Observable<A> {
+export function useObservedProp<A>(
+  a: A
+): [Observable<A>, (value: A | ((prev: A) => A)) => void] {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const subject = useMemo(() => new BehaviorSubject<A>(a), []);
   useEffect(() => {
@@ -363,7 +402,19 @@ export function useObservedProp<A>(a: A): Observable<A> {
     }
   }, [a, subject]);
   useEffect(() => () => subject.complete(), [subject]);
-  return useMemo(() => subject.asObservable(), [subject]);
+  return useMemo(
+    () => [
+      subject.asObservable(),
+      value => {
+        if (value instanceof Function) {
+          subject.next(value(subject.value));
+        } else {
+          subject.next(value);
+        }
+      },
+    ],
+    [subject]
+  );
 }
 
 export function createSharedState<T>(initialValue: T) {

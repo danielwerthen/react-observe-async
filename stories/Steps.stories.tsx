@@ -15,8 +15,11 @@ const test = interval(1000).pipe(take(10));
 function StepsComponent({ input }: any) {
   const result = useAsync(
     async observe => {
-      await observe(test);
-      return Promise.all([asyncQuery('Test')]) as Promise<any[]>;
+      const id = await observe(test);
+      if (id > 3) {
+        throw new Error('Invalid state' + id);
+      }
+      return Promise.all([asyncQuery('Test' + id)]) as Promise<any[]>;
     },
     [input]
   );
@@ -24,6 +27,8 @@ function StepsComponent({ input }: any) {
   steps.push(steps.length > 8 ? result : result.result || 'none');
   return (
     <div>
+      <button onClick={() => result.refresh()}>Refresh</button>
+      {result.error && <p>Error: {result.error.toString()}</p>}
       {steps.map((res, idx) => (
         <pre key={idx}>{JSON.stringify(res)}</pre>
       ))}
