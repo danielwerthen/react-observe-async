@@ -2,14 +2,12 @@ import {
   catchError,
   distinctUntilChanged,
   exhaustMap,
-  filter,
   finalize,
   map,
   publishReplay,
   refCount,
   skip,
   startWith,
-  switchMap,
   take,
   tap,
   throttle,
@@ -56,10 +54,8 @@ function exhaustMapWithTrailing<T, R>(
 }
 
 export type AsyncResult<T, ERR> = {
-  pending?: boolean;
   result?: T;
   error?: ERR;
-  refresh: () => Promise<T | undefined>;
 };
 
 export type ObserveValue = <T>(input: Observable<T>) => Promise<T>;
@@ -96,7 +92,9 @@ class FactoryObserver {
         .pipe(
           skip(1),
           tap(() => {
-            this.trigger.next();
+            setTimeout(() => {
+              this.trigger.next();
+            }, 0);
           })
         )
         .subscribe();
@@ -135,79 +133,48 @@ class FactoryObserver {
 }
 
 export function observeAsync<T, ERR = unknown>(
-  factories: Observable<AsyncFactory<T>>
-): Observable<AsyncResult<T, ERR>> {
-  return of(0).pipe(
-    switchMap(() => {
-      const observer = new FactoryObserver();
-      const lastResult = new BehaviorSubject<T | undefined>(undefined);
-      const refreshTrigger = new Subject();
-      const refresh = () => {
-        if (lastResult.isStopped) {
-          return Promise.resolve(lastResult.value);
-        }
-        refreshTrigger.next();
-        function guard(item: any): item is T {
-          return item !== undefined;
-        }
-        return lastResult
-          .pipe(skip(1), filter<T | undefined, T>(guard), take(1))
-          .toPromise();
-      };
-      let isComplete = false;
-      return combineLatest([
-        factories.pipe(finalize(() => (isComplete = true))),
-        observer.trigger.pipe(startWith(0)),
-        refreshTrigger.pipe(startWith(0)),
-      ]).pipe(
-        exhaustMapWithTrailing(([factory]) => {
-          const keys: symbol[] = [];
-          const result = factory(input => {
-            return observer.observe(input, key => keys.push(key));
-          });
-          return from(result).pipe(tap(() => observer.unsubscribe(keys)));
-        }),
-        tap(result => lastResult.next(result)),
-        map(result => ({ result })),
-        catchError(err => of({ error: err as ERR })),
-        startWith({
-          pending: true,
-          ...(lastResult.value !== undefined && { result: lastResult.value }),
-        }),
-        map(res => ({
-          ...res,
-          refresh,
-        })),
-        tap(() => {
-          if (observer.isComplete() && isComplete) {
-            observer.trigger.complete();
-            refreshTrigger.complete();
-            lastResult.complete();
-          }
-        }),
-
-        finalize<AsyncResult<T, ERR>>(() => {
-          observer.unsubscribe();
+  pending?: Subject<boolean>
+): OperatorFunction<AsyncFactory<T>, AsyncResult<T, ERR>> {
+  return (source): Observable<AsyncResult<T, ERR>> => {
+    const observer = new FactoryObserver();
+    let isComplete = false;
+    return combineLatest([
+      source.pipe(finalize(() => (isComplete = true))),
+      observer.trigger.pipe(startWith(0)),
+    ]).pipe(
+      tap(() => pending && !pending.isStopped && pending.next(true)),
+      exhaustMapWithTrailing(([factory]) => {
+        const keys: symbol[] = [];
+        const result = factory(input => {
+          return observer.observe(input, key => keys.push(key));
+        });
+        return from(result).pipe(tap(() => observer.unsubscribe(keys)));
+      }),
+      map(result => ({ result })),
+      catchError(err => of({ error: err as ERR })),
+      tap(() => pending && !pending.isStopped && pending.next(false)),
+      map(res => ({
+        ...res,
+      })),
+      tap(() => {
+        if (observer.isComplete() && isComplete) {
           observer.trigger.complete();
-          refreshTrigger.complete();
-          lastResult.complete();
-        })
-      );
-    })
-  );
+        }
+      }),
+
+      finalize<AsyncResult<T, ERR>>(() => {
+        observer.unsubscribe();
+        observer.trigger.complete();
+      })
+    );
+  };
 }
 
 export function useAsync<T>(factory: AsyncFactory<T>, dependencies: unknown[]) {
   const callback = useCallback(factory, dependencies);
   const factories = useObservedProp(callback);
-  const observable = useMemo(() => observeAsync(factories), [factories]);
-  return useSubscribe(observable, {
-    pending: true,
-    refresh: async () => {
-      const res = await observable.pipe(take(1)).toPromise();
-      return await res.refresh();
-    },
-  });
+  const observable = useMemo(() => factories.pipe(observeAsync()), [factories]);
+  return useSubscribe(observable, {});
 }
 
 export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
@@ -236,7 +203,8 @@ export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
     const key = getKey(input);
     return (
       store[key] ||
-      (store[key] = observeAsync<OUTPUT, ERR>(of(factory(input))).pipe(
+      (store[key] = of(factory(input)).pipe(
+        observeAsync<OUTPUT, ERR>(),
         finalize(() => delete store[key]),
         publishReplay(1),
         refCount()
@@ -246,13 +214,7 @@ export function createSharedAsync<INPUT, OUTPUT, ERR = unknown>({
   return Object.assign(getResource, {
     useSubscribe(input: INPUT) {
       const resource = getResource(input);
-      return useSubscribe(resource, {
-        pending: true,
-        refresh: async () => {
-          const res = await resource.pipe(take(1)).toPromise();
-          return await res.refresh();
-        },
-      });
+      return useSubscribe(resource, {});
     },
   });
 }
@@ -335,13 +297,13 @@ export function createSharedState<T>(initialValue: T) {
     useState() {
       return [useSubscribe(subject, subject.value), setState];
     },
+    setState,
   });
 }
 
 export type SharedFetch<INPUT extends unknown[], OUTPUT, ERR = unknown> = {
   (...input: INPUT): Observable<AsyncResult<OUTPUT, ERR>>;
   useSubscribe(...input: INPUT): AsyncResult<OUTPUT, ERR>;
-  refresh(...input: INPUT): Promise<OUTPUT | undefined>;
 };
 
 export function createSharedFetch<T, INPUT extends unknown[]>(
@@ -374,13 +336,6 @@ export function createSharedFetch<T, INPUT extends unknown[]>(
       useSubscribe(...input: INPUT) {
         const url = request(...input);
         return shared.useSubscribe(url);
-      },
-      async refresh(...input: INPUT) {
-        const url = request(...input);
-        const res = await shared(url)
-          .pipe(take(1))
-          .toPromise();
-        return await res.refresh();
       },
     }
   );
