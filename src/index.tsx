@@ -192,7 +192,7 @@ class Monitor {
   usingPending = false;
   usingError = false;
 
-  wrap<T, ERR>(result: AsyncResultWithRefresh<T, ERR>) {
+  wrap<AR extends AsyncResult<unknown, unknown>>(result: AR): AR {
     if (this.usingPending && this.usingError) {
       return result;
     }
@@ -433,6 +433,7 @@ function isObservable<T>(obj: any): obj is Observable<T> {
 
 export type AsyncState<T> = Observable<T> & {
   dispatch: (action: (v: T) => T | Promise<T> | Observable<T>) => Promise<T>;
+  getState: () => T;
   unsubscribe: () => void;
 };
 
@@ -470,9 +471,88 @@ export function asyncState<T>(initialValue: T): AsyncState<T> {
         queue.next([action, resolve]);
       });
     },
+    getState(): T {
+      return state$.value;
+    },
     unsubscribe() {
       sub.unsubscribe();
       state$.complete();
     },
   });
+}
+
+export type AsyncResultWithExecute<
+  INPUT extends unknown[],
+  T,
+  ERR
+> = AsyncResult<T, ERR> & {
+  execute: (...inputs: INPUT) => Promise<AsyncResult<T, ERR>>;
+};
+
+export function useAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
+  factory: (...input: INPUT) => Promise<T>,
+  dependencies: unknown[]
+): AsyncResultWithExecute<INPUT, T, ERR> {
+  const state$ = useMemo(
+    () => asyncState<AsyncResult<T, ERR>>({ pending: false }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+  const callback = useCallback(factory, dependencies);
+  const monitor = useMemo(() => new Monitor(), []);
+  const factories = useObservedProp(callback);
+  const execute = useCallback(
+    async (...input: INPUT) => {
+      state$.dispatch(() => ({ pending: true }));
+      const result = await factories
+        .pipe(
+          take(1),
+          switchMap(fn => fn(...input)),
+          map(result => ({ pending: false, result })),
+          catchError(err => of({ pending: false, error: err as ERR }))
+        )
+        .toPromise();
+      return await state$.dispatch(() => result);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [factories]
+  );
+
+  const [output, setOutput] = useState<AsyncResult<T, ERR>>(state$.getState());
+  const outputRef = useRef<AsyncResult<T, ERR>>(output);
+  outputRef.current = output;
+  useEffect(() => {
+    const sub = state$.subscribe(item => {
+      if (item.pending) {
+        if (monitor.usingPending) {
+          setOutput(item);
+        }
+      } else {
+        const old = outputRef.current;
+        if (
+          old.result !== item.result ||
+          old.error !== item.error ||
+          old.pending !== item.pending
+        ) {
+          setOutput(item);
+        }
+      }
+    });
+    return () => sub.unsubscribe();
+  }, [state$, monitor, outputRef]);
+  const final = useMemo(
+    () =>
+      monitor.wrap({
+        ...output,
+        execute,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [monitor, output, execute]
+  );
+  if (!monitor.usingError) {
+    if (output.error !== undefined) {
+      throw output.error;
+    }
+  }
+  return final;
 }
