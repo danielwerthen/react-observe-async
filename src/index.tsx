@@ -432,48 +432,43 @@ function isObservable<T>(obj: any): obj is Observable<T> {
 }
 
 export type AsyncState<T> = Observable<T> & {
-  dispatch: (action: (v: T) => T | Promise<T> | Observable<T>) => Observable<T>;
+  dispatch: (action: (v: T) => T | Promise<T> | Observable<T>) => Promise<T>;
   unsubscribe: () => void;
 };
 
 export function asyncState<T>(initialValue: T): AsyncState<T> {
   const queue = new Subject<
-    [
-      (v: T) => T | Promise<T> | Observable<T>,
-      (r: T | Promise<T> | Observable<T>) => void
-    ]
+    [(v: T) => T | Promise<T> | Observable<T>, (r: T) => void]
   >();
   const state$ = new BehaviorSubject<T>(initialValue);
   const sub = queue
     .pipe(
       concatMap(([applicator, resolver]) => {
         const next = applicator(state$.value);
-        resolver(next);
         if (isObservable(next)) {
-          return next;
+          let lastValue: T;
+          return next.pipe(
+            tap(res => (lastValue = res)),
+            finalize(() => resolver(lastValue))
+          );
         } else if (isPromise(next)) {
-          return from(next);
+          return from(
+            next.then(pass => {
+              resolver(pass);
+              return pass;
+            })
+          );
         }
+        resolver(next);
         return of(next);
       })
     )
     .subscribe(state$);
   return Object.assign(state$.asObservable(), {
-    dispatch(action: (v: T) => T | Promise<T> | Observable<T>) {
-      return from(
-        new Promise<T | Promise<T> | Observable<T>>(resolve => {
-          queue.next([action, resolve]);
-        })
-      ).pipe(
-        concatMap(res => {
-          if (isObservable(res)) {
-            return res;
-          } else if (isPromise(res)) {
-            return from(res);
-          }
-          return of(res);
-        })
-      );
+    dispatch(action: (v: T) => T | Promise<T> | Observable<T>): Promise<T> {
+      return new Promise<T>(resolve => {
+        queue.next([action, resolve]);
+      });
     },
     unsubscribe() {
       sub.unsubscribe();
