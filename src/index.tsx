@@ -374,23 +374,6 @@ export function useObservedProp<A>(a: A): Observable<A> {
   return useMemo(() => subject.asObservable(), [subject]);
 }
 
-export function createSharedState<T>(initialValue: T) {
-  const subject = new BehaviorSubject(initialValue);
-  const setState = (value: T | ((prev: T) => T)) => {
-    if (value instanceof Function) {
-      subject.next(value(subject.value));
-    } else {
-      subject.next(value);
-    }
-  };
-  return Object.assign(subject.asObservable(), {
-    useState() {
-      return [useSubscribe(subject, subject.value), setState];
-    },
-    setState,
-  });
-}
-
 export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   init$: Observable<RequestInit>,
   request: (...input: INPUT) => string,
@@ -416,6 +399,28 @@ export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   return (...input: INPUT) => {
     return shared(request(...input));
   };
+}
+
+export type SyncState<T> = Observable<T> & {
+  dispatch: (action: (v: T) => T | T) => T;
+  unsubscribe: () => void;
+};
+
+export function syncState<T>(initialValue: T): SyncState<T> {
+  const state$ = new BehaviorSubject(initialValue);
+  const dispatch = (value: T | ((prev: T) => T)) => {
+    const nextValue = value instanceof Function ? value(state$.value) : value;
+    if (nextValue !== state$.value) {
+      state$.next(nextValue);
+    }
+    return state$.value;
+  };
+  return Object.assign(state$.asObservable(), {
+    dispatch,
+    unsubscribe() {
+      state$.complete();
+    },
+  });
 }
 
 function isPromise<T>(obj: any): obj is Promise<T> {
