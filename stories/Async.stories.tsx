@@ -1,6 +1,6 @@
 import React from 'react';
 import { Meta, Story } from '@storybook/react';
-import { useAsync, createSharedState } from '../src';
+import { useAsync, syncState } from '../src';
 import { from, interval } from 'rxjs';
 
 function asyncQuery(text: string): Promise<string> {
@@ -11,7 +11,7 @@ function asyncQuery(text: string): Promise<string> {
 
 const inty = interval(1000);
 const inty2 = interval(2000);
-const shared = createSharedState(0);
+const shared = syncState(0);
 const completed = from([1, 2, 3]);
 
 function AsyncComponent({ input }: any) {
@@ -43,7 +43,7 @@ function AsyncComponent({ input }: any) {
       {result2.map((res, idx) => (
         <p key={idx}>{res}</p>
       ))}
-      <button onClick={() => shared.setState(v => v + 1)}>
+      <button onClick={() => shared.dispatch(v => v + 1)}>
         Increase counter
       </button>
     </div>

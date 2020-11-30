@@ -1,7 +1,7 @@
 import 'react-app-polyfill/ie11';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { createSharedFetch, createSharedState, useAsync } from '../.';
+import { createSharedFetch, syncState, useAsync } from '../.';
 import { map } from 'rxjs/operators';
 
 interface TodoInterface {
@@ -9,7 +9,7 @@ interface TodoInterface {
   id: string;
 }
 
-const authToken = createSharedState<string | undefined>(undefined);
+const authToken = syncState<string | undefined>(undefined);
 const init = authToken.pipe(
   map(auth => ({
     headers: {
@@ -25,7 +25,7 @@ const todos = createSharedFetch(
 );
 
 const Todo = ({ id }: { id: string }) => {
-  const { result, pending } = todos.useSubscribe(id);
+  const { result, pending } = todos(id).useSubscribe();
   if (pending || !result) {
     return <p>Loading</p>;
   }
@@ -47,7 +47,7 @@ const Thing = () => {
   return (
     <div>
       <button onClick={() => setState(c => c + 1)}>Click me</button>
-      <button onClick={() => todos.refresh('1')}>Click me</button>
+      <button onClick={() => todos('1').refresh()}>Click me</button>
       {body}
       {new Array(state % 2 === 0 ? 100 : 0).fill(0).map((_v, idx) => (
         <Todo key={idx} id={Math.round(Math.random() * 2 + 1).toString()} />
