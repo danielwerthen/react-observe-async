@@ -1,7 +1,6 @@
 import {
   catchError,
   concatMap,
-  exhaustMap,
   filter,
   finalize,
   map,
@@ -12,7 +11,6 @@ import {
   switchMap,
   take,
   tap,
-  throttle,
 } from 'rxjs/operators';
 import {
   BehaviorSubject,
@@ -20,7 +18,6 @@ import {
   ConnectableObservable,
   from,
   Observable,
-  ObservableInput,
   of,
   OperatorFunction,
   Subject,
@@ -28,32 +25,7 @@ import {
 } from 'rxjs';
 import { fromFetch as defaultFromFetch } from 'rxjs/fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-
-/**
- * Credit to: https://github.com/ReactiveX/rxjs/issues/5004
- * @param project
- */
-function exhaustMapWithTrailing<T, R>(
-  project: (value: T, index: number) => ObservableInput<R>
-): OperatorFunction<T, R> {
-  return (source): Observable<R> => {
-    const release = new Subject();
-
-    return source.pipe(
-      throttle(() => release, {
-        leading: true,
-        trailing: true,
-      }),
-      exhaustMap((value, index) =>
-        from(project(value, index)).pipe(
-          finalize(() => {
-            release.next();
-          })
-        )
-      )
-    );
-  };
-}
+import { exhaustMapWithTrailing } from './exhaustMapWithTrailing';
 
 export type AsyncResult<T, ERR> = {
   pending: boolean;

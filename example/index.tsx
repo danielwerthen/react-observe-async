@@ -1,7 +1,7 @@
 import 'react-app-polyfill/ie11';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { createSharedFetch, syncState, useAsync } from '../.';
+import { createSharedFetch, syncState, useAsync } from '../src/index';
 import { map } from 'rxjs/operators';
 
 interface TodoInterface {
