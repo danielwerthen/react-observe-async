@@ -1,6 +1,6 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`ObserveAsync renders without crashing 1`] = `
+exports[`ObserveAsync works with simple case 1`] = `
 Array [
   Object {
     "pending": true,
@@ -14,7 +14,7 @@ Array [
 ]
 `;
 
-exports[`ObserveAsync renders without crashing 2`] = `
+exports[`ObserveAsync works with some dependants 1`] = `
 Array [
   Array [
     7,

@@ -19,14 +19,7 @@ import {
   tap,
 } from 'rxjs/operators';
 import { exhaustMapWithTrailing } from './exhaustMapWithTrailing';
-import { AsyncFactory } from './types';
-
-export type AsyncResult<T, ERR> = {
-  pending: boolean;
-  result?: T;
-  error?: ERR;
-  refresh: () => Promise<AsyncResult<T, ERR>>;
-};
+import { AsyncFactory, AsyncResult } from './types';
 
 export function observeAsync<T, ERR = unknown>(
   factories: Observable<AsyncFactory<T>>,
@@ -120,6 +113,7 @@ export function observeAsync<T, ERR = unknown>(
     finalize(() => {
       if (subscription) {
         subscription.unsubscribe();
+        refreshSubject.complete();
       }
     })
   );
