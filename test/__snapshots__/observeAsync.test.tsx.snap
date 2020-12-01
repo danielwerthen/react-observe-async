@@ -1,0 +1,40 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ObserveAsync renders without crashing 1`] = `
+Array [
+  Object {
+    "pending": true,
+    "refresh": [Function],
+  },
+  Object {
+    "pending": false,
+    "refresh": [Function],
+    "result": 4,
+  },
+]
+`;
+
+exports[`ObserveAsync renders without crashing 2`] = `
+Array [
+  Array [
+    7,
+    17,
+  ],
+  Array [
+    6,
+    17,
+  ],
+  Array [
+    7,
+    17,
+  ],
+  Array [
+    5,
+    2,
+  ],
+  Array [
+    9,
+    2,
+  ],
+]
+`;

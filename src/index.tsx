@@ -26,16 +26,7 @@ import {
 import { fromFetch as defaultFromFetch } from 'rxjs/fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { exhaustMapWithTrailing } from './exhaustMapWithTrailing';
-
-export type AsyncResult<T, ERR> = {
-  pending: boolean;
-  result?: T;
-  error?: ERR;
-};
-
-export type ObserveValue = <T>(input: Observable<T>) => Promise<T>;
-
-export type AsyncFactory<T> = (observe: ObserveValue) => Promise<T>;
+import { AsyncFactory, AsyncResult } from './types';
 
 function getSymbol<A>(target: any, sym: symbol, factory?: () => A): A {
   if (!target[sym] && factory) {
