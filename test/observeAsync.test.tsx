@@ -86,7 +86,9 @@ function verify(fn: () => Promise<void>) {
     subjects.splice(0, subjects.length);
     global.gc();
     await fn();
+    await sleep(1000);
     global.gc();
+    await sleep(1000);
     const refs = subjects.map(sub => sub.deref());
     const notClean = refs.some(v => v);
     if (notClean) {
