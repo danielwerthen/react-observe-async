@@ -1,0 +1,29 @@
+.user-avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 100px;
+  text-align: center;
+}
+
+.user-avatar img {
+  background: #fff;
+  border-radius: 100%;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+}
+
+.user-avatar label {
+  font-size: 12px;
+}
+
+.todo-list-item {
+  display: flex;
+  border-radius: 8px;
+  background-color: #ddd;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  padding: 0.5em;
+}
+
+.todo-list-item + .todo-list-item {
+  margin-top: 1em;
+}

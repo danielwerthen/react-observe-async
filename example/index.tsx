@@ -8,6 +8,7 @@ import {
   useAsyncCallback,
 } from '../src/index';
 import { map } from 'rxjs/operators';
+import Todos from './Todos';
 
 interface TodoInterface {
   title: string;
@@ -78,7 +79,7 @@ const Thing = () => {
 const App = () => {
   return (
     <div>
-      <Thing />
+      <Todos />
     </div>
   );
 };
