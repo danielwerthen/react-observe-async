@@ -38,3 +38,21 @@ Array [
   ],
 ]
 `;
+
+exports[`asyncState should work 1`] = `
+Array [
+  15,
+  13,
+  23,
+  46,
+]
+`;
+
+exports[`syncState should work 1`] = `
+Array [
+  15,
+  12,
+  20,
+  40,
+]
+`;

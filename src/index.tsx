@@ -164,7 +164,9 @@ export function sharedAsyncFactory<INPUT, OUTPUT, ERR = unknown>({
   const getResource = (input: INPUT) => {
     const key = getKey(input);
     if (!store[key]) {
-      const res = shareAsync<OUTPUT, ERR>(factory(input));
+      const res = shareAsync<OUTPUT, ERR>(factory(input), () => {
+        delete store[key];
+      });
       store[key] = res;
     }
     return store[key];
@@ -218,7 +220,7 @@ export type SharedState<T> = Observable<T> & {
 };
 
 export type SyncState<T> = SharedState<T> & {
-  dispatch: (action: (v: T) => T | T) => T;
+  dispatch: (action: T | ((v: T) => T)) => T;
 };
 
 export function syncState<T>(initialValue: T): SyncState<T> {

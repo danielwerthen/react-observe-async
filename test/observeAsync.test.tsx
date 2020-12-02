@@ -2,6 +2,7 @@ import { BehaviorSubject, of } from 'rxjs';
 import { AsyncResult } from '../src/types';
 import { observeAsync } from '../src/observeAsync';
 import { filter, map, take, toArray } from 'rxjs/operators';
+import { shareAsync, syncState, asyncState } from '../src';
 
 function sleep(ms: number) {
   return new Promise(res => setTimeout(res, ms));
@@ -86,13 +87,12 @@ function verify(fn: () => Promise<void>) {
     subjects.splice(0, subjects.length);
     global.gc();
     await fn();
-    await sleep(100);
+    await sleep(10);
     global.gc();
-    await sleep(100);
+    await sleep(10);
     const refs = subjects.map(sub => sub.deref());
     const notClean = refs.some(v => v);
     if (notClean) {
-      console.log(refs);
       throw new Error('Observables was not garbage collected in time');
     }
   };
@@ -146,6 +146,71 @@ describe('ObserveAsync', () => {
       dependantA.complete();
       dependantB.complete();
       expect(await final).toMatchSnapshot();
+    })
+  );
+});
+
+describe('Share async', () => {
+  it(
+    'should unsubscribe as expected',
+    verify(async () => {
+      let finals = 0;
+      let starts = 0;
+      const shared = shareAsync(
+        async () => {
+          starts += 1;
+          return 5;
+        },
+        () => {
+          finals += 1;
+        }
+      );
+      const sub1 = shared.subscribe();
+      const sub2 = shared.subscribe();
+      const sub3 = shared.subscribe();
+      sub1.unsubscribe();
+      sub2.unsubscribe();
+      sub3.unsubscribe();
+      expect(finals).toEqual(1);
+      expect(starts).toEqual(1);
+      const sub4 = shared.subscribe();
+      const sub5 = shared.subscribe();
+      expect(starts).toEqual(2);
+      expect(finals).toEqual(1);
+      sub4.unsubscribe();
+      sub5.unsubscribe();
+      expect(finals).toEqual(2);
+      expect(starts).toEqual(2);
+    })
+  );
+});
+
+describe('syncState', () => {
+  it(
+    'should work',
+    verify(async () => {
+      const state = syncState(15);
+      const promise = state.pipe(toArray()).toPromise();
+      state.dispatch(12);
+      state.dispatch(() => 20);
+      state.dispatch(v => v + 20);
+      state.unsubscribe();
+      expect(await promise).toMatchSnapshot();
+    })
+  );
+});
+
+describe('asyncState', () => {
+  it(
+    'should work',
+    verify(async () => {
+      const state = asyncState(15);
+      const promise = state.pipe(toArray()).toPromise();
+      state.dispatch(13);
+      state.dispatch(() => 23);
+      state.dispatch(v => v + 23);
+      state.unsubscribe();
+      expect(await promise).toMatchSnapshot();
     })
   );
 });
