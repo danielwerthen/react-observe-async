@@ -41,17 +41,18 @@ const Todo = ({ id }: { id: string }) => {
   );
 };
 
-function Sycher() {
-  const response = useAsyncCallback(async () => {
+const Sycher = React.memo(function Sycher() {
+  const { pending, result, execute } = useAsyncCallback(async () => {
     await new Promise(res => setTimeout(res, 1000));
     return Math.random();
   }, []);
+  console.log(JSON.stringify({ result, pending }, null, '  '));
   return (
-    <button onClick={response.execute}>
-      Click for random {response.pending ? 'Loading' : response.result}
+    <button onClick={execute} disabled={pending}>
+      Click for random {pending ? 'Loading' : result}
     </button>
   );
-}
+});
 
 let c = 0;
 

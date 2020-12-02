@@ -57,7 +57,7 @@ export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
   return state;
 }
 
-export function useAsyncResult<S extends AsyncBase<unknown, unknown>>(
+export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
   result$: Observable<S>,
   initialValue: S
 ): S {
@@ -114,7 +114,7 @@ export function useAsync<T, ERR>(
     return observeAsync<T, ERR>(factories);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factories]);
-  return useAsyncResult(subject, subject.value);
+  return useAsyncBase(subject, subject.value);
 }
 
 export type SharedAsync<OUTPUT, ERR = unknown> = Observable<
@@ -211,9 +211,14 @@ export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   };
 }
 
-export type SyncState<T> = Observable<T> & {
-  dispatch: (action: (v: T) => T | T) => T;
+export type SharedState<T> = Observable<T> & {
+  getValue: () => T;
+  useSubscribe: () => T;
   unsubscribe: () => void;
+};
+
+export type SyncState<T> = SharedState<T> & {
+  dispatch: (action: (v: T) => T | T) => T;
 };
 
 export function syncState<T>(initialValue: T): SyncState<T> {
@@ -227,6 +232,8 @@ export function syncState<T>(initialValue: T): SyncState<T> {
   };
   return Object.assign(state$.asObservable(), {
     dispatch,
+    getValue: () => state$.value,
+    useSubscribe: () => useSubscribe(state$, state$.value),
     unsubscribe() {
       state$.complete();
     },
@@ -241,12 +248,10 @@ function isObservable<T>(obj: any): obj is Observable<T> {
   return obj && typeof obj.subscribe === 'function';
 }
 
-export type AsyncState<T> = Observable<T> & {
+export type AsyncState<T> = SharedState<T> & {
   dispatch: (
     action: T | ((v: T) => T | Promise<T> | Observable<T>)
   ) => Promise<T>;
-  getState: () => T;
-  unsubscribe: () => void;
 };
 
 export function asyncState<T>(initialValue: T): AsyncState<T> {
@@ -289,8 +294,11 @@ export function asyncState<T>(initialValue: T): AsyncState<T> {
         queue.next([action, resolve]);
       });
     },
-    getState(): T {
+    getValue(): T {
       return state$.value;
+    },
+    useSubscribe(): T {
+      return useSubscribe(state$, state$.value);
     },
     unsubscribe() {
       sub.unsubscribe();
@@ -299,44 +307,41 @@ export function asyncState<T>(initialValue: T): AsyncState<T> {
   });
 }
 
+export function asyncCallback<INPUT extends unknown[], T, ERR = unknown>(
+  factories: Observable<(...input: INPUT) => Promise<T>>
+) {
+  const execute: (
+    ...inputs: INPUT
+  ) => Promise<AsyncCallback<INPUT, T, ERR>> = async (...input: INPUT) => {
+    return await state$.dispatch(() => {
+      return factories.pipe(
+        take(1),
+        switchMap(fn => fn(...input)),
+        map(result => ({ pending: false, result, execute })),
+        catchError(err => of({ pending: false, error: err as ERR, execute })),
+        startWith({
+          pending: true,
+          execute,
+        })
+      );
+    });
+  };
+  const state$ = asyncState<AsyncCallback<INPUT, T, ERR>>({
+    pending: false,
+    execute,
+  });
+  return state$;
+}
+
 export function useAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   factory: (...input: INPUT) => Promise<T>,
   dependencies: unknown[]
 ): AsyncCallback<INPUT, T, ERR> {
   const callback = useCallback(factory, dependencies);
   const factories = useObservedProp(callback);
-  const execute: (
-    ...inputs: INPUT
-  ) => Promise<AsyncCallback<INPUT, T, ERR>> = useCallback(
-    async (...input: INPUT) => {
-      state$.dispatch(() => ({
-        pending: true,
-        execute,
-      }));
-      return await state$.dispatch(() => {
-        return factories
-          .pipe(
-            take(1),
-            switchMap(fn => fn(...input)),
-            map(result => ({ pending: false, result, execute })),
-            catchError(err =>
-              of({ pending: false, error: err as ERR, execute })
-            )
-          )
-          .toPromise();
-      });
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [factories]
-  );
-  const state$ = useMemo(
-    () =>
-      asyncState<AsyncCallback<INPUT, T, ERR>>({
-        pending: false,
-        execute,
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [execute]
-  );
-  return useAsyncResult(state$, state$.getState());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const state$ = useMemo(() => asyncCallback<INPUT, T, ERR>(factories), [
+    factories,
+  ]);
+  return useAsyncBase(state$, state$.getValue());
 }
