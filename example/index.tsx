@@ -1,7 +1,12 @@
 import 'react-app-polyfill/ie11';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { createSharedFetch, syncState, useAsync } from '../src/index';
+import {
+  createSharedFetch,
+  syncState,
+  useAsync,
+  useAsyncCallback,
+} from '../src/index';
 import { map } from 'rxjs/operators';
 
 interface TodoInterface {
@@ -36,6 +41,18 @@ const Todo = ({ id }: { id: string }) => {
   );
 };
 
+function Sycher() {
+  const response = useAsyncCallback(async () => {
+    await new Promise(res => setTimeout(res, 1000));
+    return Math.random();
+  }, []);
+  return (
+    <button onClick={response.execute}>
+      Click for random {response.pending ? 'Loading' : response.result}
+    </button>
+  );
+}
+
 let c = 0;
 
 const Thing = () => {
@@ -46,6 +63,7 @@ const Thing = () => {
   }, []);
   return (
     <div>
+      <Sycher />
       <button onClick={() => setState(c => c + 1)}>Click me</button>
       <button onClick={() => todos('1').refresh()}>Click me</button>
       {body}

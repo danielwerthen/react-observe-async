@@ -1,4 +1,4 @@
-import { BehaviorSubject, of, Subject } from 'rxjs';
+import { BehaviorSubject, of } from 'rxjs';
 import { AsyncResult } from '../src/types';
 import { observeAsync } from '../src/observeAsync';
 import { filter, map, take, toArray } from 'rxjs/operators';
@@ -86,14 +86,14 @@ function verify(fn: () => Promise<void>) {
     subjects.splice(0, subjects.length);
     global.gc();
     await fn();
-    await sleep(1000);
+    await sleep(100);
     global.gc();
-    await sleep(1000);
+    await sleep(100);
     const refs = subjects.map(sub => sub.deref());
     const notClean = refs.some(v => v);
     if (notClean) {
       console.log(refs);
-      throw new Error(' observables was not garbage collected in time');
+      throw new Error('Observables was not garbage collected in time');
     }
   };
 }
@@ -116,14 +116,12 @@ describe('ObserveAsync', () => {
     verify(async () => {
       const dependantA = new BehaviorSubject(7);
       const dependantB = new BehaviorSubject(17);
-      const refresh = new Subject();
       const observed: BehaviorSubject<AsyncResult<any, unknown>> = observeAsync(
         of(async observe => {
           const depA = await observe(dependantA);
           const depB = await observe(dependantB);
           return [depA, depB];
-        }),
-        refresh
+        })
       );
       const final = observed
         .pipe(
@@ -145,7 +143,6 @@ describe('ObserveAsync', () => {
       dependantA.next(9);
       await sleep(0);
       observed.complete();
-      refresh.complete();
       dependantA.complete();
       dependantB.complete();
       expect(await final).toMatchSnapshot();

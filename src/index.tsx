@@ -3,21 +3,32 @@ import {
   concatMap,
   finalize,
   map,
+  publishReplay,
+  refCount,
+  skip,
+  startWith,
   switchMap,
   take,
   tap,
 } from 'rxjs/operators';
 import { BehaviorSubject, from, Observable, of, Subject } from 'rxjs';
 import { fromFetch as defaultFromFetch } from 'rxjs/fetch';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AsyncFactory, AsyncResult } from './types';
+import {
+  DependencyList,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { AsyncFactory, AsyncResult, AsyncBase, AsyncCallback } from './types';
 import { observeAsync } from './observeAsync';
 
 class Monitor {
   usingPending = false;
   usingError = false;
 
-  wrap<AR extends AsyncResult<unknown, unknown>>(result: AR): AR {
+  wrap<AR extends AsyncBase<unknown, unknown>>(result: AR): AR {
     if (this.usingPending && this.usingError) {
       return result;
     }
@@ -37,22 +48,25 @@ class Monitor {
   }
 }
 
-export function useAsync<T, ERR>(
-  factory: AsyncFactory<T>,
-  dependencies: unknown[]
-): AsyncResult<T, ERR> {
-  const callback = useCallback(factory, dependencies);
+export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
+  const [state, setState] = useState(initialValue);
+  useEffect(() => {
+    const sub = observable.subscribe(setState);
+    return () => sub.unsubscribe();
+  }, [observable]);
+  return state;
+}
+
+export function useAsyncResult<S extends AsyncBase<unknown, unknown>>(
+  result$: Observable<S>,
+  initialValue: S
+): S {
   const monitor = useMemo(() => new Monitor(), []);
-  const factories = useObservedProp(callback);
-  const observable = useMemo(() => {
-    return observeAsync<T, ERR>(factories);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [factories]);
-  const [output, setOutput] = useState<AsyncResult<T, ERR>>(observable.value);
-  const outputRef = useRef<AsyncResult<T, ERR>>(output);
+  const [output, setOutput] = useState<S>(initialValue);
+  const outputRef = useRef<S>(output);
   outputRef.current = output;
   useEffect(() => {
-    const sub = observable.subscribe(item => {
+    const sub = result$.subscribe(item => {
       if (item.pending) {
         if (monitor.usingPending) {
           setOutput(item);
@@ -69,7 +83,7 @@ export function useAsync<T, ERR>(
       }
     });
     return () => sub.unsubscribe();
-  }, [observable, monitor, outputRef]);
+  }, [result$, monitor, outputRef]);
   const final = useMemo(
     () => monitor.wrap(output),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -83,13 +97,24 @@ export function useAsync<T, ERR>(
   return final;
 }
 
-export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
-  const [state, setState] = useState(initialValue);
-  useEffect(() => {
-    const sub = observable.subscribe(setState);
-    return () => sub.unsubscribe();
-  }, [observable]);
-  return state;
+/**
+ * `useAsync` will only recompute the async result when one of the `dependencies` has changed.
+ * The factory function gets an observe function as its first parameter. This function can turn an
+ * observable into a promise, and update the async result once the observable emits a new value.
+ * @param factory
+ * @param dependencies
+ */
+export function useAsync<T, ERR>(
+  factory: AsyncFactory<T>,
+  dependencies: DependencyList
+): AsyncResult<T, ERR> {
+  const callback = useCallback(factory, dependencies);
+  const factories = useObservedProp(callback);
+  const subject = useMemo(() => {
+    return observeAsync<T, ERR>(factories);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factories]);
+  return useAsyncResult(subject, subject.value);
 }
 
 export type SharedAsync<OUTPUT, ERR = unknown> = Observable<
@@ -97,23 +122,32 @@ export type SharedAsync<OUTPUT, ERR = unknown> = Observable<
 > & {
   useSubscribe(): AsyncResult<OUTPUT, ERR>;
   refresh(): Promise<AsyncResult<OUTPUT, ERR>>;
-  unsubscribe(): void;
 };
 
 export function shareAsync<OUTPUT, ERR = unknown>(
-  factory: AsyncFactory<OUTPUT>
+  factory: AsyncFactory<OUTPUT>,
+  finalizeFn: () => void = () => void 0
 ): SharedAsync<OUTPUT, ERR> {
-  const observable = observeAsync<OUTPUT, ERR>(of(factory));
-  return Object.assign(observable, {
+  const obs = of(0).pipe(
+    switchMap(() => {
+      return observeAsync<OUTPUT, ERR>(of(factory));
+    }),
+    skip(1),
+    finalize(finalizeFn),
+    publishReplay(1),
+    refCount()
+  );
+  const refresh = () => {
+    return obs
+      .pipe(take(1))
+      .toPromise()
+      .then(item => item.refresh());
+  };
+  return Object.assign(obs.pipe(startWith({ pending: true, refresh })), {
     useSubscribe() {
-      return useSubscribe(observable, observable.value);
+      return useSubscribe(obs, { pending: true, refresh });
     },
-    refresh() {
-      return observable.value.refresh();
-    },
-    unsubscribe() {
-      observable.complete();
-    },
+    refresh,
   });
 }
 
@@ -208,41 +242,49 @@ function isObservable<T>(obj: any): obj is Observable<T> {
 }
 
 export type AsyncState<T> = Observable<T> & {
-  dispatch: (action: (v: T) => T | Promise<T> | Observable<T>) => Promise<T>;
+  dispatch: (
+    action: T | ((v: T) => T | Promise<T> | Observable<T>)
+  ) => Promise<T>;
   getState: () => T;
   unsubscribe: () => void;
 };
 
 export function asyncState<T>(initialValue: T): AsyncState<T> {
   const queue = new Subject<
-    [(v: T) => T | Promise<T> | Observable<T>, (r: T) => void]
+    [T | ((v: T) => T | Promise<T> | Observable<T>), (r: T) => void]
   >();
   const state$ = new BehaviorSubject<T>(initialValue);
   const sub = queue
     .pipe(
       concatMap(([applicator, resolver]) => {
-        const next = applicator(state$.value);
-        if (isObservable(next)) {
-          let lastValue: T;
-          return next.pipe(
-            tap(res => (lastValue = res)),
-            finalize(() => resolver(lastValue))
-          );
-        } else if (isPromise(next)) {
-          return from(
-            next.then(pass => {
-              resolver(pass);
-              return pass;
-            })
-          );
+        if (applicator instanceof Function) {
+          const next = applicator(state$.value);
+          if (isObservable(next)) {
+            let lastValue: T;
+            return next.pipe(
+              tap(res => (lastValue = res)),
+              finalize(() => resolver(lastValue))
+            );
+          } else if (isPromise(next)) {
+            return from(
+              next.then(pass => {
+                resolver(pass);
+                return pass;
+              })
+            );
+          }
+          resolver(next);
+          return of(next);
         }
-        resolver(next);
-        return of(next);
+        resolver(applicator);
+        return of(applicator);
       })
     )
     .subscribe(state$);
   return Object.assign(state$.asObservable(), {
-    dispatch(action: (v: T) => T | Promise<T> | Observable<T>): Promise<T> {
+    dispatch(
+      action: T | ((v: T) => T | Promise<T> | Observable<T>)
+    ): Promise<T> {
       return new Promise<T>(resolve => {
         queue.next([action, resolve]);
       });
@@ -257,70 +299,44 @@ export function asyncState<T>(initialValue: T): AsyncState<T> {
   });
 }
 
-export type AsyncResultWithExecute<INPUT extends unknown[], T, ERR> = Omit<
-  AsyncResult<T, ERR>,
-  'refresh'
-> & {
-  execute: (...inputs: INPUT) => Promise<Omit<AsyncResult<T, ERR>, 'refresh'>>;
-};
-
 export function useAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   factory: (...input: INPUT) => Promise<T>,
   dependencies: unknown[]
-): AsyncResultWithExecute<INPUT, T, ERR> {
-  const state$ = useMemo(
-    () =>
-      asyncState<Omit<AsyncResult<T, ERR>, 'refresh'>>({
-        pending: false,
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
+): AsyncCallback<INPUT, T, ERR> {
   const callback = useCallback(factory, dependencies);
-  const monitor = useMemo(() => new Monitor(), []);
   const factories = useObservedProp(callback);
-  const execute = useCallback(
+  const execute: (
+    ...inputs: INPUT
+  ) => Promise<AsyncCallback<INPUT, T, ERR>> = useCallback(
     async (...input: INPUT) => {
       state$.dispatch(() => ({
         pending: true,
+        execute,
       }));
-      const result = await factories
-        .pipe(
-          take(1),
-          switchMap(fn => fn(...input)),
-          map(result => ({ pending: false, result })),
-          catchError(err => of({ pending: false, error: err as ERR }))
-        )
-        .toPromise();
-      return await state$.dispatch(() => result);
+      return await state$.dispatch(() => {
+        return factories
+          .pipe(
+            take(1),
+            switchMap(fn => fn(...input)),
+            map(result => ({ pending: false, result, execute })),
+            catchError(err =>
+              of({ pending: false, error: err as ERR, execute })
+            )
+          )
+          .toPromise();
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [factories]
   );
-
-  const [output, setOutput] = useState<Omit<AsyncResult<T, ERR>, 'refresh'>>(
-    state$.getState()
+  const state$ = useMemo(
+    () =>
+      asyncState<AsyncCallback<INPUT, T, ERR>>({
+        pending: false,
+        execute,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [execute]
   );
-  const outputRef = useRef<Omit<AsyncResult<T, ERR>, 'refresh'>>(output);
-  outputRef.current = output;
-  useEffect(() => {
-    const sub = state$.subscribe(item => {
-      if (item.pending) {
-        if (monitor.usingPending) {
-          setOutput(item);
-        }
-      } else {
-        const old = outputRef.current;
-        if (
-          old.result !== item.result ||
-          old.error !== item.error ||
-          old.pending !== item.pending
-        ) {
-          setOutput(item);
-        }
-      }
-    });
-    return () => sub.unsubscribe();
-  }, [state$, monitor, outputRef]);
-  return { ...output, execute };
+  return useAsyncResult(state$, state$.getState());
 }
