@@ -3,7 +3,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import {
   createSharedFetch,
-  syncState,
+  asyncState,
   useAsync,
   useAsyncCallback,
 } from '../src/index';
@@ -14,7 +14,7 @@ interface TodoInterface {
   id: string;
 }
 
-const authToken = syncState<string | undefined>(undefined);
+const authToken = asyncState<string | undefined>(undefined);
 const init = authToken.pipe(
   map(auth => ({
     headers: {

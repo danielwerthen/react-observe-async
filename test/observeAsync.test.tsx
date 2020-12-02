@@ -2,7 +2,7 @@ import { BehaviorSubject, of } from 'rxjs';
 import { AsyncResult } from '../src/types';
 import { observeAsync } from '../src/observeAsync';
 import { filter, map, take, toArray } from 'rxjs/operators';
-import { shareAsync, syncState, asyncState } from '../src';
+import { shareAsync, asyncState } from '../src';
 
 function sleep(ms: number) {
   return new Promise(res => setTimeout(res, ms));
@@ -181,21 +181,6 @@ describe('Share async', () => {
       sub5.unsubscribe();
       expect(finals).toEqual(2);
       expect(starts).toEqual(2);
-    })
-  );
-});
-
-describe('syncState', () => {
-  it(
-    'should work',
-    verify(async () => {
-      const state = syncState(15);
-      const promise = state.pipe(toArray()).toPromise();
-      state.dispatch(12);
-      state.dispatch(() => 20);
-      state.dispatch(v => v + 20);
-      state.unsubscribe();
-      expect(await promise).toMatchSnapshot();
     })
   );
 });

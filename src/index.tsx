@@ -213,35 +213,6 @@ export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   };
 }
 
-export type SharedState<T> = Observable<T> & {
-  getValue: () => T;
-  useSubscribe: () => T;
-  unsubscribe: () => void;
-};
-
-export type SyncState<T> = SharedState<T> & {
-  dispatch: (action: T | ((v: T) => T)) => T;
-};
-
-export function syncState<T>(initialValue: T): SyncState<T> {
-  const state$ = new BehaviorSubject(initialValue);
-  const dispatch = (value: T | ((prev: T) => T)) => {
-    const nextValue = value instanceof Function ? value(state$.value) : value;
-    if (nextValue !== state$.value) {
-      state$.next(nextValue);
-    }
-    return state$.value;
-  };
-  return Object.assign(state$.asObservable(), {
-    dispatch,
-    getValue: () => state$.value,
-    useSubscribe: () => useSubscribe(state$, state$.value),
-    unsubscribe() {
-      state$.complete();
-    },
-  });
-}
-
 function isPromise<T>(obj: any): obj is Promise<T> {
   return obj && typeof obj.then === 'function';
 }
@@ -250,10 +221,13 @@ function isObservable<T>(obj: any): obj is Observable<T> {
   return obj && typeof obj.subscribe === 'function';
 }
 
-export type AsyncState<T> = SharedState<T> & {
+export type AsyncState<T> = Observable<T> & {
   dispatch: (
     action: T | ((v: T) => T | Promise<T> | Observable<T>)
   ) => Promise<T>;
+  getValue: () => T;
+  useSubscribe: () => T;
+  unsubscribe: () => void;
 };
 
 export function asyncState<T>(initialValue: T): AsyncState<T> {
