@@ -189,11 +189,12 @@ describe('asyncState', () => {
   it(
     'should work',
     verify(async () => {
-      const state = asyncState(15);
+      const state = asyncState(15, (_state, action) => action);
       const promise = state.pipe(toArray()).toPromise();
       state.dispatch(13);
       state.dispatch(() => 23);
       state.dispatch(v => v + 23);
+      await sleep(1);
       state.unsubscribe();
       expect(await promise).toMatchSnapshot();
     })

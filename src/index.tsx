@@ -1,6 +1,7 @@
 import {
   catchError,
   concatMap,
+  distinctUntilChanged,
   finalize,
   map,
   publishReplay,
@@ -13,9 +14,11 @@ import {
 } from 'rxjs/operators';
 import { BehaviorSubject, from, Observable, of, Subject } from 'rxjs';
 import { fromFetch as defaultFromFetch } from 'rxjs/fetch';
-import {
+import React, {
+  createContext,
   DependencyList,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -64,14 +67,17 @@ export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
   const monitor = useMemo(() => new Monitor(), []);
   const [output, setOutput] = useState<S>(initialValue);
   const outputRef = useRef<S>(output);
+  const setPending = useSetPending();
   outputRef.current = output;
   useEffect(() => {
     const sub = result$.subscribe(item => {
       if (item.pending) {
+        setPending(true);
         if (monitor.usingPending) {
           setOutput(item);
         }
       } else {
+        setPending(false);
         const old = outputRef.current;
         if (
           old.result !== item.result ||
@@ -83,7 +89,7 @@ export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
       }
     });
     return () => sub.unsubscribe();
-  }, [result$, monitor, outputRef]);
+  }, [result$, monitor, outputRef, setPending]);
   const final = useMemo(
     () => monitor.wrap(output),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -213,72 +219,77 @@ export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   };
 }
 
-function isPromise<T>(obj: any): obj is Promise<T> {
-  return obj && typeof obj.then === 'function';
-}
-
 function isObservable<T>(obj: any): obj is Observable<T> {
   return obj && typeof obj.subscribe === 'function';
 }
 
-export type AsyncState<T> = Observable<T> & {
-  dispatch: (
-    action: T | ((v: T) => T | Promise<T> | Observable<T>)
-  ) => Promise<T>;
+export type AsyncState<T, ACTION> = Observable<T> & {
+  dispatch: (action: AsyncAction<T, ACTION>) => Promise<T>;
   getValue: () => T;
   useSubscribe: () => T;
+  useSelect: <O>(selector: (t: T) => O, deps: unknown[]) => O;
   unsubscribe: () => void;
 };
 
-export function asyncState<T>(initialValue: T): AsyncState<T> {
-  const queue = new Subject<
-    [T | ((v: T) => T | Promise<T> | Observable<T>), (r: T) => void]
-  >();
-  const state$ = new BehaviorSubject<T>(initialValue);
+export type AsyncReducer<STATE, ACTION> = (
+  state: STATE,
+  action: ACTION
+) => STATE | Promise<STATE>;
+
+export type AsyncAction<STATE, ACTION = STATE> =
+  | ACTION
+  | ((v: STATE) => ACTION | Promise<ACTION> | Observable<ACTION>);
+
+export function asyncState<STATE, ACTION = STATE>(
+  initialValue: STATE,
+  reducer: AsyncReducer<STATE, ACTION>
+): AsyncState<STATE, ACTION> {
+  const queue = new Subject<[AsyncAction<STATE, ACTION>, (r: STATE) => void]>();
+  const state$ = new BehaviorSubject<STATE>(initialValue);
   const sub = queue
     .pipe(
       concatMap(([applicator, resolver]) => {
-        if (applicator instanceof Function) {
-          const next = applicator(state$.value);
-          if (isObservable(next)) {
-            let lastValue: T;
-            return next.pipe(
-              tap(res => (lastValue = res)),
-              finalize(() => resolver(lastValue))
-            );
-          } else if (isPromise(next)) {
-            return from(
-              next.then(pass => {
-                resolver(pass);
-                return pass;
-              })
-            );
-          }
-          resolver(next);
-          return of(next);
-        }
-        resolver(applicator);
-        return of(applicator);
+        const action =
+          applicator instanceof Function
+            ? applicator(state$.value)
+            : applicator;
+        let lastValue: STATE;
+        const observableAction = isObservable(action)
+          ? action
+          : from(Promise.resolve(action));
+        return observableAction.pipe(
+          concatMap(action => Promise.resolve(reducer(state$.value, action))),
+          tap(res => (lastValue = res)),
+          finalize(() => resolver(lastValue))
+        );
       })
     )
     .subscribe(state$);
   return Object.assign(state$.asObservable(), {
-    dispatch(
-      action: T | ((v: T) => T | Promise<T> | Observable<T>)
-    ): Promise<T> {
-      return new Promise<T>(resolve => {
+    dispatch(action: AsyncAction<STATE, ACTION>): Promise<STATE> {
+      return new Promise<STATE>(resolve => {
         queue.next([action, resolve]);
       });
     },
-    getValue(): T {
+    getValue(): STATE {
       return state$.value;
     },
-    useSubscribe(): T {
+    useSubscribe(): STATE {
       return useSubscribe(state$, state$.value);
+    },
+    useSelect<O>(selector: (state: STATE) => O, deps: unknown[]): O {
+      const callback = useCallback(selector, deps);
+      const selected = useMemo(
+        () => state$.pipe(map(callback), distinctUntilChanged()),
+        [callback]
+      );
+      const initial = useInitialize(() => selector(state$.value));
+      return useSubscribe(selected, initial);
     },
     unsubscribe() {
       sub.unsubscribe();
       state$.complete();
+      queue.unsubscribe();
     },
   });
 }
@@ -302,10 +313,13 @@ export function asyncCallback<INPUT extends unknown[], T, ERR = unknown>(
       );
     });
   };
-  const state$ = asyncState<AsyncCallback<INPUT, T, ERR>>({
-    pending: false,
-    execute,
-  });
+  const state$ = asyncState<AsyncCallback<INPUT, T, ERR>>(
+    {
+      pending: false,
+      execute,
+    },
+    (_state, action) => action
+  );
   return state$;
 }
 
@@ -321,3 +335,87 @@ export function useAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   ]);
   return useAsyncBase(state$, state$.getValue());
 }
+
+function useInitialize<T>(factory: () => T): T {
+  const ref = useRef<T>();
+  if (!ref.current) {
+    ref.current = factory();
+  }
+  return ref.current;
+}
+
+export type AsyncStateContext<STATE, ACTION> = {
+  Provider: React.FC<{ initialState?: STATE }>;
+  useSubscribe: () => STATE;
+  useSelect: <O>(selector: (state: STATE) => O, deps: unknown[]) => O;
+  useDispatch: () => (action: AsyncAction<STATE, ACTION>) => Promise<STATE>;
+};
+
+export function asyncStateContext<STATE, ACTION>(
+  stateFactory: (initial?: STATE) => AsyncState<STATE, ACTION>
+): AsyncStateContext<STATE, ACTION> {
+  const context = createContext(stateFactory());
+  const Provider: React.FC<{ initialState?: STATE }> = ({
+    children,
+    initialState,
+  }) => {
+    const ctx = useInitialize(() => stateFactory(initialState));
+    useEffect(() => () => ctx.unsubscribe(), [ctx]);
+    return <context.Provider value={ctx}>{children}</context.Provider>;
+  };
+  return {
+    Provider,
+    useSubscribe: () => {
+      const state = useContext(context);
+      return state.useSubscribe();
+    },
+    useSelect<OUTPUT>(
+      selector: (state: STATE) => OUTPUT,
+      deps: unknown[]
+    ): OUTPUT {
+      const state = useContext(context);
+      return state.useSelect(selector, deps);
+    },
+    useDispatch: () => {
+      const state = useContext(context);
+      const dispatchRef = useRef(state.dispatch);
+      dispatchRef.current = state.dispatch;
+      return useCallback((...args) => dispatchRef.current(...args), [
+        dispatchRef,
+      ]);
+    },
+  };
+}
+
+const pendingState = asyncStateContext(() => {
+  return asyncState<Set<Symbol>, [Symbol, boolean]>(
+    new Set<Symbol>(),
+    (state, [sym, pending]) => {
+      if (pending) {
+        state.add(sym);
+      } else {
+        state.delete(sym);
+      }
+      return state;
+    }
+  );
+});
+
+export function usePending() {
+  return pendingState.useSelect(symbols => symbols.size > 0, []);
+}
+
+export function useSetPending() {
+  const sym = useInitialize(() => Symbol('Pending state identifier'));
+  const dispatch = pendingState.useDispatch();
+  return useCallback(
+    (pending: boolean) => {
+      return dispatch([sym, pending]);
+    },
+    [dispatch, sym]
+  );
+}
+
+export const PendingBoundary: React.FC<{}> = ({ children }) => (
+  <pendingState.Provider>{children}</pendingState.Provider>
+);

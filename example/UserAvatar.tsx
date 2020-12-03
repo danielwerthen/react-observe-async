@@ -21,7 +21,7 @@ export default function UserAvatar({ userId }: { userId: number }) {
   return (
     <div key={user.id} className="user-avatar">
       <img
-        src={`https://i.pravatar.cc/50?img=${user.id}`}
+        src={`https://i.pravatar.cc/50?img=${user.id + 10}`}
         width="50"
         height="50"
         alt={user.name}

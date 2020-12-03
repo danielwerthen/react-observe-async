@@ -31,16 +31,22 @@ function shuffle(array) {
 }
 
 export default function Todos() {
-  const { result: todos = [] } = useAsync(async observe => {
+  const { result: todos = [], refresh, pending } = useAsync(async observe => {
     const todos = await observe(
       fromFetch('https://jsonplaceholder.typicode.com/todos/', {
         selector: response => response.json() as Promise<TodoInterface[]>,
       })
     );
+    await new Promise(res => setTimeout(res, 100 + Math.random() * 900));
     return shuffle(todos);
   }, []);
   return (
     <div>
+      <div className="button-group">
+        <button onClick={refresh} disabled={pending}>
+          Refresh list
+        </button>
+      </div>
       {todos.map(todo => (
         <div key={todo.id} className="todo-list-item">
           <UserAvatar userId={todo.userId} />
