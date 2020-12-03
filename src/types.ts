@@ -18,3 +18,34 @@ export interface AsyncCallback<INPUT extends unknown[], T, ERR>
 export type ObserveValue = <T>(input: Observable<T>) => Promise<T>;
 
 export type AsyncFactory<T> = (observe: ObserveValue) => Promise<T>;
+
+export type SharedAsync<OUTPUT, ERR = unknown> = Observable<
+  AsyncResult<OUTPUT, ERR>
+> & {
+  useSubscribe(): AsyncResult<OUTPUT, ERR>;
+  refresh(): Promise<AsyncResult<OUTPUT, ERR>>;
+};
+
+export type AsyncState<T, ACTION> = Observable<T> & {
+  dispatch: (action: AsyncAction<T, ACTION>) => Promise<T>;
+  getValue: () => T;
+  useSubscribe: () => T;
+  useSelect: <O>(selector: (t: T) => O, deps: unknown[]) => O;
+  unsubscribe: () => void;
+};
+
+export type AsyncReducer<STATE, ACTION> = (
+  state: STATE,
+  action: ACTION
+) => STATE | Promise<STATE>;
+
+export type AsyncAction<STATE, ACTION = STATE> =
+  | ACTION
+  | ((v: STATE) => ACTION | Promise<ACTION> | Observable<ACTION>);
+
+export type AsyncStateContext<STATE, ACTION> = {
+  Provider: React.FC<{ initialState?: STATE }>;
+  useSubscribe: () => STATE;
+  useSelect: <O>(selector: (state: STATE) => O, deps: unknown[]) => O;
+  useDispatch: () => (action: AsyncAction<STATE, ACTION>) => Promise<STATE>;
+};

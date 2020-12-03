@@ -24,7 +24,17 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AsyncFactory, AsyncResult, AsyncBase, AsyncCallback } from './types';
+import {
+  AsyncFactory,
+  AsyncResult,
+  AsyncBase,
+  AsyncCallback,
+  SharedAsync,
+  AsyncStateContext,
+  AsyncState,
+  AsyncAction,
+  AsyncReducer,
+} from './types';
 import { observeAsync } from './observeAsync';
 
 class Monitor {
@@ -107,7 +117,7 @@ export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
  * `useAsync` will only recompute the async result when one of the `dependencies` has changed.
  * The factory function gets an observe function as its first parameter. This function can turn an
  * observable into a promise, and update the async result once the observable emits a new value.
- * @param factory
+ * @param factory Async factory method which will be provided with the observe function.
  * @param dependencies
  */
 export function useAsync<T, ERR>(
@@ -123,13 +133,13 @@ export function useAsync<T, ERR>(
   return useAsyncBase(subject, subject.value);
 }
 
-export type SharedAsync<OUTPUT, ERR = unknown> = Observable<
-  AsyncResult<OUTPUT, ERR>
-> & {
-  useSubscribe(): AsyncResult<OUTPUT, ERR>;
-  refresh(): Promise<AsyncResult<OUTPUT, ERR>>;
-};
-
+/**
+ * Compared to `useAsync`, this will allow the resulting value be shared by any components.
+ * The resulting observable is published and refcounted to ensure the same async result is shared between subscribers.
+ * The factory will be trigged when the observable is resubscribed after a period of no subscriptions.
+ * @param factory Async factory method which will be provided with the observe function.
+ * @param finalizeFn The resulting observable will call this callback whenever there is no subscriptions ongoing.
+ */
 export function shareAsync<OUTPUT, ERR = unknown>(
   factory: AsyncFactory<OUTPUT>,
   finalizeFn: () => void = () => void 0
@@ -157,6 +167,10 @@ export function shareAsync<OUTPUT, ERR = unknown>(
   });
 }
 
+/**
+ * Sometimes you want to share a set of similar async observables, cached by a `string`. Otherwise same as `shareAsync`.
+ * @param options
+ */
 export function sharedAsyncFactory<INPUT, OUTPUT, ERR = unknown>({
   factory,
   getKey,
@@ -180,6 +194,10 @@ export function sharedAsyncFactory<INPUT, OUTPUT, ERR = unknown>({
   return getResource;
 }
 
+/**
+ * This hook turns a series of prop values into a referentially stable observable.
+ * @param a a prop
+ */
 export function useObservedProp<A>(a: A): Observable<A> {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const subject = useMemo(() => new BehaviorSubject<A>(a), []);
@@ -192,6 +210,14 @@ export function useObservedProp<A>(a: A): Observable<A> {
   return useMemo(() => subject.asObservable(), [subject]);
 }
 
+/**
+ * Helper function to created shared fetch result instances. Useful in the cases where a variable amount of components fetches
+ * from the same resource.
+ * @param init$
+ * @param request
+ * @param selector
+ * @param fromFetch
+ */
 export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
   init$: Observable<RequestInit>,
   request: (...input: INPUT) => string,
@@ -223,23 +249,13 @@ function isObservable<T>(obj: any): obj is Observable<T> {
   return obj && typeof obj.subscribe === 'function';
 }
 
-export type AsyncState<T, ACTION> = Observable<T> & {
-  dispatch: (action: AsyncAction<T, ACTION>) => Promise<T>;
-  getValue: () => T;
-  useSubscribe: () => T;
-  useSelect: <O>(selector: (t: T) => O, deps: unknown[]) => O;
-  unsubscribe: () => void;
-};
-
-export type AsyncReducer<STATE, ACTION> = (
-  state: STATE,
-  action: ACTION
-) => STATE | Promise<STATE>;
-
-export type AsyncAction<STATE, ACTION = STATE> =
-  | ACTION
-  | ((v: STATE) => ACTION | Promise<ACTION> | Observable<ACTION>);
-
+/**
+ * `asyncState` allows you to share redux-like state without the boilerplate. It utilies a queue to ensure that any dispatched action
+ * is reflect in the shared state in a sequential way. If two actions are dispatched at the same time, the first one will be exhausted before the next action is updating the state.
+ * The dispatch function returns a promise that awaits util the queue is ready to exhaust the action.
+ * @param initialValue
+ * @param reducer
+ */
 export function asyncState<STATE, ACTION = STATE>(
   initialValue: STATE,
   reducer: AsyncReducer<STATE, ACTION>
@@ -323,6 +339,11 @@ export function asyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   return state$;
 }
 
+/**
+ * Use this instead of `useAsync` if you want to control the timing of the asynchronous operations. Operations will be executed in an enforced sequence, using an underlying `asyncState`.
+ * @param factory
+ * @param dependencies
+ */
 export function useAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   factory: (...input: INPUT) => Promise<T>,
   dependencies: unknown[]
@@ -344,13 +365,10 @@ function useInitialize<T>(factory: () => T): T {
   return ref.current;
 }
 
-export type AsyncStateContext<STATE, ACTION> = {
-  Provider: React.FC<{ initialState?: STATE }>;
-  useSubscribe: () => STATE;
-  useSelect: <O>(selector: (state: STATE) => O, deps: unknown[]) => O;
-  useDispatch: () => (action: AsyncAction<STATE, ACTION>) => Promise<STATE>;
-};
-
+/**
+ * Sometime you want encapsulate the `asyncState` in a context, to allow for concurrent async states across an application.
+ * @param stateFactory
+ */
 export function asyncStateContext<STATE, ACTION>(
   stateFactory: (initial?: STATE) => AsyncState<STATE, ACTION>
 ): AsyncStateContext<STATE, ACTION> {
@@ -401,10 +419,16 @@ const pendingState = asyncStateContext(() => {
   );
 });
 
+/**
+ * This will reflect the pending state of any `useAsync` or `useAsyncCallback` operations, inside the pending boundary context.
+ */
 export function usePending() {
   return pendingState.useSelect(symbols => symbols.size > 0, []);
 }
 
+/**
+ * Use this callback if you want to use the pending context outside of the `useAsync` and `useAsyncCallback` hooks.
+ */
 export function useSetPending() {
   const sym = useInitialize(() => Symbol('Pending state identifier'));
   const dispatch = pendingState.useDispatch();
