@@ -1,4 +1,4 @@
-# Reacṭ̣-Observe-Async!
+# React-Observe-Async!
 
 This library is an collection of my favorite ways of dealing with asynchronous state and side effects. Observables are my preffered approach to doing just that, however, Observables and rxjs is quite complicated compared to Promises and async await functions. This library tries to bridge this gap, by providing promise-based api to observable functionality.
 
