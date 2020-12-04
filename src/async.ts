@@ -13,13 +13,18 @@ import {
   debounceTime,
   finalize,
   map,
+  publishReplay,
+  refCount,
   skip,
   startWith,
+  switchMap,
   take,
   tap,
 } from 'rxjs/operators';
-import { exhaustMapWithTrailing } from './exhaustMapWithTrailing';
-import { AsyncFactory, AsyncResult } from './types';
+import { exhaustMapWithTrailing, useObservedProp, useSubscribe } from './utils';
+import { AsyncFactory, AsyncResult, SharedAsync } from './types';
+import { DependencyList, useCallback, useMemo } from 'react';
+import { useAsyncBase } from './useAsyncBase';
 
 export function observeAsync<T, ERR = unknown>(
   factories: Observable<AsyncFactory<T>>,
@@ -119,4 +124,82 @@ export function observeAsync<T, ERR = unknown>(
   );
   subscription = obs.subscribe(subj);
   return subj;
+}
+
+/**
+ * `useAsync` will only recompute the async result when one of the `dependencies` has changed.
+ * The factory function gets an observe function as its first parameter. This function can turn an
+ * observable into a promise, and update the async result once the observable emits a new value.
+ * @param factory Async factory method which will be provided with the observe function.
+ * @param dependencies
+ */
+export function useAsync<T, ERR>(
+  factory: AsyncFactory<T>,
+  dependencies: DependencyList
+): AsyncResult<T, ERR> {
+  const callback = useCallback(factory, dependencies);
+  const factories = useObservedProp(callback);
+  const subject = useMemo(() => {
+    return observeAsync<T, ERR>(factories);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factories]);
+  return useAsyncBase(subject, subject.value);
+}
+
+/**
+ * Compared to `useAsync`, this will allow the resulting value be shared by any components.
+ * The resulting observable is published and refcounted to ensure the same async result is shared between subscribers.
+ * The factory will be trigged when the observable is resubscribed after a period of no subscriptions.
+ * @param factory Async factory method which will be provided with the observe function.
+ * @param finalizeFn The resulting observable will call this callback whenever there is no subscriptions ongoing.
+ */
+export function shareAsync<OUTPUT, ERR = unknown>(
+  factory: AsyncFactory<OUTPUT>,
+  finalizeFn: () => void = () => void 0
+): SharedAsync<OUTPUT, ERR> {
+  const obs = of(0).pipe(
+    switchMap(() => {
+      return observeAsync<OUTPUT, ERR>(of(factory));
+    }),
+    skip(1),
+    finalize(finalizeFn),
+    publishReplay(1),
+    refCount()
+  );
+  const refresh = () => {
+    return obs
+      .pipe(take(1))
+      .toPromise()
+      .then(item => item.refresh());
+  };
+  return Object.assign(obs.pipe(startWith({ pending: true, refresh })), {
+    useSubscribe() {
+      return useSubscribe(obs, { pending: true, refresh });
+    },
+    refresh,
+  });
+}
+
+/**
+ * Sometimes you want to share a set of similar async observables, cached by a `string`. Otherwise same as `shareAsync`.
+ * @param options
+ */
+export function sharedAsyncMap<INPUT, OUTPUT, ERR = unknown>(
+  factory: (input: INPUT) => AsyncFactory<OUTPUT>,
+  getKey: (input: INPUT) => string
+): (input: INPUT) => SharedAsync<OUTPUT, ERR> {
+  const store: {
+    [key: string]: SharedAsync<OUTPUT, ERR>;
+  } = {};
+  const getResource = (input: INPUT) => {
+    const key = getKey(input);
+    if (!store[key]) {
+      const res = shareAsync<OUTPUT, ERR>(factory(input), () => {
+        delete store[key];
+      });
+      store[key] = res;
+    }
+    return store[key];
+  };
+  return getResource;
 }

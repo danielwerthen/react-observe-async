@@ -1,6 +1,6 @@
 import { BehaviorSubject, of } from 'rxjs';
 import { AsyncResult } from '../src/types';
-import { observeAsync } from '../src/observeAsync';
+import { observeAsync } from '../src/async';
 import { filter, map, take, toArray } from 'rxjs/operators';
 import { shareAsync, asyncState } from '../src';
 

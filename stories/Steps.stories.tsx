@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
 import { Meta, Story } from '@storybook/react';
-import { AsyncFactory, useAsync } from '../src';
+import { useAsync } from '../src';
 import { interval } from 'rxjs';
 import { take } from 'rxjs/operators';
+import { AsyncFactory } from '../src/types';
 
 function asyncQuery(text: string): Promise<string> {
   return new Promise(resolve =>
