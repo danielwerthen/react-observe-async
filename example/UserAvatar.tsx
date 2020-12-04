@@ -1,16 +1,23 @@
 import * as React from 'react';
-import { createSharedFetch } from '../src';
-import { init } from './auth';
+import { fromFetch } from 'rxjs/fetch';
+import { sharedAsyncMap } from '../src';
 
 interface UserInterface {
   id: number;
   name: string;
 }
 
-const users = createSharedFetch(
-  init,
-  (userId: number) => `https://jsonplaceholder.typicode.com/users/${userId}`,
-  response => response.json() as Promise<UserInterface>
+const users = sharedAsyncMap(
+  (userId: number) => {
+    return async observe => {
+      return observe(
+        fromFetch(`https://jsonplaceholder.typicode.com/users/${userId}`, {
+          selector: res => res.json() as Promise<UserInterface>,
+        })
+      );
+    };
+  },
+  (userId: number) => userId.toString()
 );
 
 export default function UserAvatar({ userId }: { userId: number }) {

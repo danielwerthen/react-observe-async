@@ -13,7 +13,6 @@ import {
   tap,
 } from 'rxjs/operators';
 import { BehaviorSubject, from, Observable, of, Subject } from 'rxjs';
-import { fromFetch as defaultFromFetch } from 'rxjs/fetch';
 import React, {
   createContext,
   DependencyList,
@@ -36,39 +35,7 @@ import {
   AsyncReducer,
 } from './types';
 import { observeAsync } from './observeAsync';
-
-class Monitor {
-  usingPending = false;
-  usingError = false;
-
-  wrap<AR extends AsyncBase<unknown, unknown>>(result: AR): AR {
-    if (this.usingPending && this.usingError) {
-      return result;
-    }
-    return new Proxy(result, {
-      get: (target, prop, receiver) => {
-        switch (prop) {
-          case 'pending':
-            this.usingPending = true;
-            break;
-          case 'error':
-            this.usingError = true;
-            break;
-        }
-        return Reflect.get(target, prop, receiver);
-      },
-    });
-  }
-}
-
-export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
-  const [state, setState] = useState(initialValue);
-  useEffect(() => {
-    const sub = observable.subscribe(setState);
-    return () => sub.unsubscribe();
-  }, [observable]);
-  return state;
-}
+import { Monitor, useObservedProp, useSubscribe, isObservable } from './utils';
 
 export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
   result$: Observable<S>,
@@ -171,13 +138,10 @@ export function shareAsync<OUTPUT, ERR = unknown>(
  * Sometimes you want to share a set of similar async observables, cached by a `string`. Otherwise same as `shareAsync`.
  * @param options
  */
-export function sharedAsyncFactory<INPUT, OUTPUT, ERR = unknown>({
-  factory,
-  getKey,
-}: {
-  factory: (input: INPUT) => AsyncFactory<OUTPUT>;
-  getKey: (input: INPUT) => string;
-}): (input: INPUT) => SharedAsync<OUTPUT, ERR> {
+export function sharedAsyncMap<INPUT, OUTPUT, ERR = unknown>(
+  factory: (input: INPUT) => AsyncFactory<OUTPUT>,
+  getKey: (input: INPUT) => string
+): (input: INPUT) => SharedAsync<OUTPUT, ERR> {
   const store: {
     [key: string]: SharedAsync<OUTPUT, ERR>;
   } = {};
@@ -195,64 +159,10 @@ export function sharedAsyncFactory<INPUT, OUTPUT, ERR = unknown>({
 }
 
 /**
- * This hook turns a series of prop values into a referentially stable observable.
- * @param a a prop
- */
-export function useObservedProp<A>(a: A): Observable<A> {
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const subject = useMemo(() => new BehaviorSubject<A>(a), []);
-  useEffect(() => {
-    if (subject.value !== a) {
-      subject.next(a);
-    }
-  }, [a, subject]);
-  useEffect(() => () => subject.complete(), [subject]);
-  return useMemo(() => subject.asObservable(), [subject]);
-}
-
-/**
- * Helper function to created shared fetch result instances. Useful in the cases where a variable amount of components fetches
- * from the same resource.
- * @param init$
- * @param request
- * @param selector
- * @param fromFetch
- */
-export function createSharedFetch<T, INPUT extends unknown[], ERR = unknown>(
-  init$: Observable<RequestInit>,
-  request: (...input: INPUT) => string,
-  selector: (response: Response) => Promise<T>,
-  fromFetch: typeof defaultFromFetch = defaultFromFetch
-): (...input: INPUT) => SharedAsync<T, ERR> {
-  const shared = sharedAsyncFactory<string, T, ERR>({
-    factory(input: string) {
-      return async observe => {
-        const init = await observe(init$);
-        return observe(
-          fromFetch(input, {
-            ...init,
-            selector,
-          })
-        );
-      };
-    },
-    getKey(input: string) {
-      return input;
-    },
-  });
-  return (...input: INPUT) => {
-    return shared(request(...input));
-  };
-}
-
-function isObservable<T>(obj: any): obj is Observable<T> {
-  return obj && typeof obj.subscribe === 'function';
-}
-
-/**
  * `asyncState` allows you to share redux-like state without the boilerplate. It utilies a queue to ensure that any dispatched action
  * is reflect in the shared state in a sequential way. If two actions are dispatched at the same time, the first one will be exhausted before the next action is updating the state.
- * The dispatch function returns a promise that awaits util the queue is ready to exhaust the action.
+ * The dispatch function returns a promise resolves once the entire dispatched action has been exhausted.
+ * An action can be a single state value, or a function that returns a single, promise or observable of state values.
  * @param initialValue
  * @param reducer
  */
@@ -274,7 +184,10 @@ export function asyncState<STATE, ACTION = STATE>(
           ? action
           : from(Promise.resolve(action));
         return observableAction.pipe(
-          concatMap(action => Promise.resolve(reducer(state$.value, action))),
+          concatMap(action => {
+            const next = reducer(state$.value, action);
+            return isObservable(next) ? next : Promise.resolve(next);
+          }),
           tap(res => (lastValue = res)),
           finalize(() => resolver(lastValue))
         );
@@ -310,7 +223,7 @@ export function asyncState<STATE, ACTION = STATE>(
   });
 }
 
-export function asyncCallback<INPUT extends unknown[], T, ERR = unknown>(
+export function observeAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   factories: Observable<(...input: INPUT) => Promise<T>>
 ) {
   const execute: (
@@ -339,6 +252,37 @@ export function asyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   return state$;
 }
 
+export function shareAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
+  factory: (...input: INPUT) => Promise<T>
+) {
+  const state$ = observeAsyncCallback<INPUT, T, ERR>(of(factory));
+  return Object.assign(state$, {
+    execute(...input: INPUT) {
+      return state$
+        .pipe(
+          take(1),
+          switchMap(item => item.execute(...input))
+        )
+        .toPromise();
+    },
+    useSubscribe() {
+      return useAsyncBase(state$, state$.getValue());
+    },
+    useSelect<O>(
+      selector: (state: AsyncCallback<INPUT, T, ERR>) => O,
+      deps: unknown[]
+    ) {
+      return state$.useSelect(selector, deps);
+    },
+    getValue() {
+      return state$.getValue();
+    },
+    unsubscribe() {
+      return state$.unsubscribe();
+    },
+  });
+}
+
 /**
  * Use this instead of `useAsync` if you want to control the timing of the asynchronous operations. Operations will be executed in an enforced sequence, using an underlying `asyncState`.
  * @param factory
@@ -351,7 +295,7 @@ export function useAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
   const callback = useCallback(factory, dependencies);
   const factories = useObservedProp(callback);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const state$ = useMemo(() => asyncCallback<INPUT, T, ERR>(factories), [
+  const state$ = useMemo(() => observeAsyncCallback<INPUT, T, ERR>(factories), [
     factories,
   ]);
   return useAsyncBase(state$, state$.getValue());

@@ -37,7 +37,7 @@ export type AsyncState<T, ACTION> = Observable<T> & {
 export type AsyncReducer<STATE, ACTION> = (
   state: STATE,
   action: ACTION
-) => STATE | Promise<STATE>;
+) => STATE | Promise<STATE> | Observable<STATE>;
 
 export type AsyncAction<STATE, ACTION = STATE> =
   | ACTION
