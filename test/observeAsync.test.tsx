@@ -2,7 +2,7 @@ import { BehaviorSubject, of } from 'rxjs';
 import { AsyncResult } from '../src/types';
 import { observeAsync } from '../src/async';
 import { filter, map, take, toArray } from 'rxjs/operators';
-import { shareAsync, asyncState } from '../src';
+import { shareAsync, observeAsyncState, observeAsyncCallback } from '../src';
 
 function sleep(ms: number) {
   return new Promise(res => setTimeout(res, ms));
@@ -189,12 +189,31 @@ describe('asyncState', () => {
   it(
     'should work',
     verify(async () => {
-      const state = asyncState(15, (_state, action) => action);
+      const state = observeAsyncState(15, (_state, action) => action);
       const promise = state.pipe(toArray()).toPromise();
       state.dispatch(13);
       state.dispatch(() => 23);
       state.dispatch(v => v + 23);
       await sleep(1);
+      state.unsubscribe();
+      expect(await promise).toMatchSnapshot();
+    })
+  );
+});
+
+describe('asyncCallback', () => {
+  it(
+    'should produce the expected array',
+    verify(async () => {
+      const state = observeAsyncCallback(
+        of(async (item: string) => {
+          return `Modified(${item})`;
+        })
+      );
+      const promise = state.pipe(toArray()).toPromise();
+      await state.execute('test');
+      await state.execute('test2');
+      await state.execute('test3');
       state.unsubscribe();
       expect(await promise).toMatchSnapshot();
     })

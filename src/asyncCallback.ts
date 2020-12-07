@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { Observable, of } from 'rxjs';
 import { catchError, map, startWith, switchMap, take } from 'rxjs/operators';
-import { asyncState } from './asyncState';
+import { observeAsyncState } from './asyncState';
 import { AsyncCallback } from './types';
 import { useAsyncBase } from './useAsyncBase';
 import { useObservedProp } from './utils';
@@ -25,20 +25,13 @@ export function observeAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
       );
     });
   };
-  const state$ = asyncState<AsyncCallback<INPUT, T, ERR>>(
+  const state$ = observeAsyncState<AsyncCallback<INPUT, T, ERR>>(
     {
       pending: false,
       execute,
     },
     (_state, action) => action
   );
-  return state$;
-}
-
-export function shareAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
-  factory: (...input: INPUT) => Promise<T>
-) {
-  const state$ = observeAsyncCallback<INPUT, T, ERR>(of(factory));
   return Object.assign(state$, {
     execute(...input: INPUT) {
       return state$
@@ -57,13 +50,13 @@ export function shareAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
     ) {
       return state$.useSelect(selector, deps);
     },
-    getValue() {
-      return state$.getValue();
-    },
-    unsubscribe() {
-      return state$.unsubscribe();
-    },
   });
+}
+
+export function shareAsyncCallback<INPUT extends unknown[], T, ERR = unknown>(
+  factory: (...input: INPUT) => Promise<T>
+) {
+  return observeAsyncCallback<INPUT, T, ERR>(of(factory));
 }
 
 /**

@@ -1,9 +1,9 @@
 import React, { useCallback } from 'react';
-import { asyncState, asyncStateContext } from './asyncState';
+import { observeAsyncState, asyncStateContext } from './asyncState';
 import { useInitialize } from './utils';
 
 const pendingState = asyncStateContext(() => {
-  return asyncState<Set<Symbol>, [Symbol, boolean]>(
+  return observeAsyncState<Set<Symbol>, [Symbol, boolean]>(
     new Set<Symbol>(),
     (state, [sym, pending]) => {
       if (pending) {

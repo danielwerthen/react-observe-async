@@ -30,7 +30,7 @@ import { useInitialize, useSubscribe } from './utils';
  * @param initialValue
  * @param reducer
  */
-export function asyncState<STATE, ACTION = STATE>(
+export function observeAsyncState<STATE, ACTION = STATE>(
   initialValue: STATE,
   reducer: AsyncReducer<STATE, ACTION>
 ): AsyncState<STATE, ACTION> {
@@ -88,6 +88,23 @@ export function asyncState<STATE, ACTION = STATE>(
       queue.unsubscribe();
     },
   });
+}
+
+export const shareAsyncState = observeAsyncState;
+
+export function useAsyncState<STATE, ACTION = STATE>(
+  initialValue: STATE,
+  reducer: AsyncReducer<STATE, ACTION>,
+  deps: unknown[]
+) {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const state$ = useMemo(() => observeAsyncState(initialValue, reducer), [
+    reducer,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    ...deps,
+  ]);
+  const state = state$.useSubscribe();
+  return [state, state$.dispatch];
 }
 
 /**

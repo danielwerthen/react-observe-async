@@ -39,6 +39,42 @@ Array [
 ]
 `;
 
+exports[`asyncCallback should produce the expected array 1`] = `
+Array [
+  Object {
+    "execute": [Function],
+    "pending": false,
+  },
+  Object {
+    "execute": [Function],
+    "pending": true,
+  },
+  Object {
+    "execute": [Function],
+    "pending": false,
+    "result": "Modified(test)",
+  },
+  Object {
+    "execute": [Function],
+    "pending": true,
+  },
+  Object {
+    "execute": [Function],
+    "pending": false,
+    "result": "Modified(test2)",
+  },
+  Object {
+    "execute": [Function],
+    "pending": true,
+  },
+  Object {
+    "execute": [Function],
+    "pending": false,
+    "result": "Modified(test3)",
+  },
+]
+`;
+
 exports[`asyncState should work 1`] = `
 Array [
   15,
