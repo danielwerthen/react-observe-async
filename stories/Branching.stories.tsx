@@ -1,6 +1,6 @@
 import React from 'react';
 import { Meta, Story } from '@storybook/react';
-import { useAsync } from '../src';
+import { useAsync, useAsyncElement } from '../src';
 import { from, of } from 'rxjs';
 import { concatMap, delay, map } from 'rxjs/operators';
 
@@ -22,7 +22,15 @@ function AsyncComponent({ input }: any) {
       )
     );
   }, []);
-  return <div>{result}</div>;
+  const separate = useAsyncElement(async () => {
+    const text = await asyncQuery('text');
+    return <p>{text}</p>;
+  }, []);
+  return (
+    <div>
+      {result} {separate}
+    </div>
+  );
 }
 
 const meta: Meta = {

@@ -14,3 +14,5 @@ export {
 export { useAsync, shareAsync, sharedAsyncMap, observeAsync } from './async';
 
 export { usePending, useSetPending } from './pending';
+
+export { useAsyncElement } from './asyncElement';
