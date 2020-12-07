@@ -34,12 +34,19 @@ export class Monitor {
   }
 }
 
-export function useSubscribe<T>(observable: Observable<T>, initialValue: T): T {
+export function useSubscribe<T>(
+  observable: Observable<T> | (() => Observable<T>),
+  initialValue: T
+): T {
   const [state, setState] = useState(initialValue);
+  const obs = useMemo(
+    () => (observable instanceof Function ? observable() : observable),
+    [observable]
+  );
   useEffect(() => {
-    const sub = observable.subscribe(setState);
+    const sub = obs.subscribe(setState);
     return () => sub.unsubscribe();
-  }, [observable]);
+  }, [obs]);
   return state;
 }
 

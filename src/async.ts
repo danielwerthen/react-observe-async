@@ -2,6 +2,7 @@ import {
   BehaviorSubject,
   combineLatest,
   from,
+  isObservable,
   Observable,
   of,
   ReplaySubject,
@@ -10,6 +11,7 @@ import {
 } from 'rxjs';
 import {
   catchError,
+  concatMap,
   debounceTime,
   finalize,
   map,
@@ -85,8 +87,18 @@ export function observeAsync<T, ERR = unknown>(
         dependants.push(observable);
         return obs;
       });
-      return from(promise).pipe(
-        tap(() => {
+      return (isObservable(promise)
+        ? promise
+        : from(promise).pipe(
+            concatMap(result => {
+              if (isObservable(result)) {
+                return result;
+              }
+              return of(result);
+            })
+          )
+      ).pipe(
+        finalize(() => {
           prevDependants.forEach(dep => {
             if (!dependants.includes(dep)) {
               unsubscribeDependent(dep);
@@ -116,6 +128,9 @@ export function observeAsync<T, ERR = unknown>(
       );
     }),
     finalize(() => {
+      prevDependants.forEach(dep => {
+        unsubscribeDependent(dep);
+      });
       if (subscription) {
         subscription.unsubscribe();
         refreshSubject.complete();
@@ -123,7 +138,13 @@ export function observeAsync<T, ERR = unknown>(
     })
   );
   subscription = obs.subscribe(subj);
-  return subj;
+  const oldComplete = subj.complete;
+  return Object.assign(subj, {
+    complete() {
+      oldComplete.apply(subj);
+      subscription.unsubscribe();
+    },
+  });
 }
 
 /**

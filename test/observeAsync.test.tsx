@@ -1,4 +1,4 @@
-import { BehaviorSubject, of } from 'rxjs';
+import { BehaviorSubject, interval, of } from 'rxjs';
 import { AsyncResult } from '../src/types';
 import { observeAsync } from '../src/async';
 import { filter, map, take, toArray } from 'rxjs/operators';
@@ -108,6 +108,7 @@ describe('ObserveAsync', () => {
       const final = observed.pipe(take(2), toArray()).toPromise();
       await sleep(0);
       expect(await final).toMatchSnapshot();
+      await sleep(100);
     })
   );
 
@@ -116,10 +117,12 @@ describe('ObserveAsync', () => {
     verify(async () => {
       const dependantA = new BehaviorSubject(7);
       const dependantB = new BehaviorSubject(17);
+      const timer = interval(500);
       const observed: BehaviorSubject<AsyncResult<any, unknown>> = observeAsync(
         of(async observe => {
           const depA = await observe(dependantA);
           const depB = await observe(dependantB);
+          observe(timer);
           return [depA, depB];
         })
       );

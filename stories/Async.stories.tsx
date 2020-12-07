@@ -1,6 +1,6 @@
 import React from 'react';
 import { Meta, Story } from '@storybook/react';
-import { useAsync, syncState } from '../src';
+import { useAsync, shareAsyncState } from '../src';
 import { from, interval } from 'rxjs';
 
 function asyncQuery(text: string): Promise<string> {
@@ -11,7 +11,7 @@ function asyncQuery(text: string): Promise<string> {
 
 const inty = interval(1000);
 const inty2 = interval(2000);
-const shared = syncState(0);
+const shared = shareAsyncState(0, (state, action) => action);
 const completed = from([1, 2, 3]);
 
 function AsyncComponent({ input }: any) {
