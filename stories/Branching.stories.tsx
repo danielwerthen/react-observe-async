@@ -24,8 +24,12 @@ function AsyncComponent({ input }: any) {
   }, []);
   const separate = useAsyncElement(async () => {
     const text = await asyncQuery('text');
-    return <p>{text}</p>;
-  }, []);
+    return (
+      <p>
+        {text} + {input}
+      </p>
+    );
+  }, [input]);
   return (
     <div>
       {result} {separate}
