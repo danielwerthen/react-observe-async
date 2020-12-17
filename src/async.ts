@@ -23,7 +23,7 @@ import {
   take,
   tap,
 } from 'rxjs/operators';
-import { exhaustMapWithTrailing, useObservedProp, useSubscribe } from './utils';
+import { exhaustMapWithTrailing, useObservedProp } from './utils';
 import { AsyncFactory, AsyncResult, SharedAsync } from './types';
 import { DependencyList, useCallback, useMemo } from 'react';
 import { useAsyncBase } from './useAsyncBase';
@@ -195,7 +195,7 @@ export function shareAsync<OUTPUT, ERR = unknown>(
   };
   return Object.assign(obs.pipe(startWith({ pending: true, refresh })), {
     useSubscribe() {
-      return useSubscribe(obs, { pending: true, refresh });
+      return useAsyncBase(obs, { pending: true, refresh });
     },
     refresh,
   });
