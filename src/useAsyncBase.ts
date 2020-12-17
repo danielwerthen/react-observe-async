@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Observable } from 'rxjs';
-import { useSetPending } from './pending';
+import { usePendingInstance } from './pending';
 import { AsyncBase } from './types';
 import { Monitor } from './utils';
 
@@ -11,17 +11,19 @@ export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
   const monitor = useMemo(() => new Monitor(), []);
   const [output, setOutput] = useState<S>(initialValue);
   const outputRef = useRef<S>(output);
-  const setPending = useSetPending();
+  const pendingInstance = usePendingInstance();
   outputRef.current = output;
   useEffect(() => {
     const sub = result$.subscribe(item => {
       if (item.pending) {
-        setPending(true);
+        if (pendingInstance.state.value !== 'init') {
+          pendingInstance.state.next('pending');
+        }
         if (monitor.usingPending) {
           setOutput(item);
         }
       } else {
-        setPending(false);
+        pendingInstance.state.next('ready');
         const old = outputRef.current;
         if (
           old.result !== item.result ||
@@ -33,7 +35,7 @@ export function useAsyncBase<S extends AsyncBase<unknown, unknown>>(
       }
     });
     return () => sub.unsubscribe();
-  }, [result$, monitor, outputRef, setPending]);
+  }, [result$, monitor, outputRef, pendingInstance]);
   const final = useMemo(
     () => monitor.wrap(output),
     // eslint-disable-next-line react-hooks/exhaustive-deps
